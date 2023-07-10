@@ -1,0 +1,18 @@
+[package]
+name = "e1000-emu"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# Latest git version of libvfio-user-rs
+libvfio-user = { git = "https://github.com/vmuxIO/libvfio-user-rs.git" }
+# Local development version, with libvfio-user-rs being in the same parent directory
+#libvfio-user = { path = "../libvfio-user-rs/libvfio-user" }
+
+# Raw bindings to libvfio-user useful for testing functions before they are integrated into the wrapper crate above
+#libvfio-user-sys = { path = "../libvfio-user-rs/libvfio-user-sys" }
+
+tempfile = "3.6.0"
