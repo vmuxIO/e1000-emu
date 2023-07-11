@@ -16,3 +16,5 @@ libvfio-user = { git = "https://github.com/vmuxIO/libvfio-user-rs.git" }
 #libvfio-user-sys = { path = "../libvfio-user-rs/libvfio-user-sys" }
 
 tempfile = "3.6.0"
+anyhow = "1.0.71"
+packed_struct = "0.10.1"

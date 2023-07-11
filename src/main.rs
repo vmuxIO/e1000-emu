@@ -3,74 +3,113 @@ use std::os::fd::AsRawFd;
 use libvfio_user::*;
 use tempfile::tempfile;
 
+use crate::registers::*;
+
+mod registers;
+
+const OFFSET_CTRL: usize = 0x0;
+const OFFSET_STATUS: usize = 0x8;
+
 #[derive(Debug)]
 struct E1000 {
-    bar0_data: [u8; 0x20000],
-    initialized: bool,
+    ctrl: Ctrl,
+    status: Status,
+    leftover_data: [u8; 0x20000],
 }
 
 impl Default for E1000 {
     fn default() -> Self {
         Self {
-            bar0_data: [0; 0x20000],
-            initialized: false,
+            leftover_data: [0; 0x20000],
+            ctrl: Default::default(),
+            status: Default::default(),
         }
     }
 }
 
 impl Device for E1000 {
     fn log(&self, level: i32, msg: &str) {
-        println!("E1000: {} - {}", level, msg);
+        if level <= 6 {
+            println!("E1000: {} - {}", level, msg);
+        }
     }
 
     fn reset(&mut self, reason: DeviceResetReason) -> Result<(), i32> {
         println!("E1000: Resetting device, Reason: {:?}", reason);
-        self.bar0_data = [0; 0x20000];
-        self.initialized = false;
+        self.leftover_data = [0; 0x20000];
         Ok(())
     }
 
     fn region_access_bar0(
         &mut self, offset: usize, data: &mut [u8], write: bool,
     ) -> Result<usize, i32> {
-        // Hacky workarounds
-        if offset == 0x8 && !self.initialized {
-            // TODO: Listen for Ctrl SLU instead
-            self.initialize();
+        // Check size and offset
+        if data.len() != 4 && data.len() != 8 {
+            eprintln!(
+                "E1000: Warning: Out of spec region access size: {}, expected 4 or 8",
+                data.len()
+            );
+        }
+        if offset % 4 != 0 {
+            eprintln!(
+                "E1000: Warning: Out of spec region access offset: {}, expected multiple of 4",
+                offset
+            );
         }
 
-        // Region access
-        let len = data.len();
-
-        if write {
-            print!("E1000: Writing {:x} bytes to BAR0 at {:x}", len, offset);
-
-            if len < 32 {
-                print!(": {:x?} ->", &self.bar0_data[offset..offset + len]);
+        // TODO: Use some sort of map instead of matching offsets ourselves
+        match offset {
+            // Control register
+            OFFSET_CTRL => {
+                if write {
+                    self.ctrl.write(data).unwrap();
+                    self.ctrl_access(write);
+                } else {
+                    self.ctrl.read(data).unwrap();
+                }
             }
+            // Status register
+            OFFSET_STATUS => {
+                if write {
+                    eprintln!("E1000: Attempted to write into status register");
+                } else {
+                    self.status.read(data).unwrap();
+                    eprintln!(
+                        "E1000: Reading status register: {:?} -> {:?}",
+                        self.status, data
+                    );
+                }
+            }
+            // Unimplemented registers, just save values
+            _ => {
+                let len = data.len();
+                if write {
+                    print!(
+                        "E1000: Writing {:x} bytes to BAR0 at {:x}: {:x?} ->",
+                        len,
+                        offset,
+                        &self.leftover_data[offset..offset + len]
+                    );
 
-            self.bar0_data[offset..offset + len].copy_from_slice(data);
-        } else {
-            print!("E1000: Reading {:x} bytes from BAR0 at {:x}:", len, offset);
-            data.copy_from_slice(&self.bar0_data[offset..offset + len]);
+                    self.leftover_data[offset..offset + len].copy_from_slice(data);
+                } else {
+                    print!("E1000: Reading {:x} bytes from BAR0 at {:x}:", len, offset);
+                    data.copy_from_slice(&self.leftover_data[offset..offset + len]);
+                }
+                println!(" {:x?}", data);
+            }
         }
 
-        if len < 32 {
-            print!(" {:x?}", data);
-        }
-        println!();
-
-        Ok(len)
+        Ok(data.len())
     }
 }
 
 impl E1000 {
-    fn initialize(&mut self) {
-        eprintln!("################### E1000: Initializing device #######################");
-        self.initialized = true;
-
-        // "Link up"
-        self.bar0_data[0x8] |= 0x2;
+    fn ctrl_access(&mut self, _write: bool) {
+        println!("E1000: Ctrl access: {:?}", self.ctrl);
+        if self.ctrl.SLU {
+            self.status.LU = true;
+        }
     }
 }
 
