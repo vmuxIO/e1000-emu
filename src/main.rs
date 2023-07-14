@@ -6,23 +6,19 @@ use tempfile::tempfile;
 use crate::registers::*;
 
 mod registers;
-
-const OFFSET_CTRL: usize = 0x0;
-const OFFSET_STATUS: usize = 0x8;
+mod util;
 
 #[derive(Debug)]
-struct E1000 {
-    ctrl: Ctrl,
-    status: Status,
-    leftover_data: [u8; 0x20000],
+pub struct E1000 {
+    regs: Registers,
+    fallback_buffer: [u8; 0x20000],
 }
 
 impl Default for E1000 {
     fn default() -> Self {
         Self {
-            leftover_data: [0; 0x20000],
-            ctrl: Default::default(),
-            status: Default::default(),
+            regs: Default::default(),
+            fallback_buffer: [0; 0x20000],
         }
     }
 }
@@ -30,13 +26,13 @@ impl Default for E1000 {
 impl Device for E1000 {
     fn log(&self, level: i32, msg: &str) {
         if level <= 6 {
-            println!("E1000: {} - {}", level, msg);
+            println!("libvfio-user log: {} - {}", level, msg);
         }
     }
 
     fn reset(&mut self, reason: DeviceResetReason) -> Result<(), i32> {
         println!("E1000: Resetting device, Reason: {:?}", reason);
-        self.leftover_data = [0; 0x20000];
+        self.reset_e1000();
         Ok(())
     }
 
@@ -44,7 +40,10 @@ impl Device for E1000 {
         &mut self, offset: usize, data: &mut [u8], write: bool,
     ) -> Result<usize, i32> {
         // Check size and offset
-        if data.len() != 4 && data.len() != 8 {
+        if data.len() != 4 {
+            if data.len() == 8 {
+                unimplemented!("Automatic chunking not yet implemented")
+            }
             eprintln!(
                 "E1000: Warning: Out of spec region access size: {}, expected 4 or 8",
                 data.len()
@@ -57,44 +56,24 @@ impl Device for E1000 {
             );
         }
 
-        // TODO: Use some sort of map instead of matching offsets ourselves
-        match offset {
-            // Control register
-            OFFSET_CTRL => {
-                if write {
-                    self.ctrl.write(data).unwrap();
-                    self.ctrl_access(write);
-                } else {
-                    self.ctrl.read(data).unwrap();
-                }
-            }
-            // Status register
-            OFFSET_STATUS => {
-                if write {
-                    eprintln!("E1000: Attempted to write into status register");
-                } else {
-                    self.status.read(data).unwrap();
-                    eprintln!(
-                        "E1000: Reading status register: {:?} -> {:?}",
-                        self.status, data
-                    );
-                }
-            }
-            // Unimplemented registers, just save values
-            _ => {
+        match self.access_register(offset as u32, data, write) {
+            Some(result) => result.unwrap(),
+            None => {
+                print!("Unmatched register access, redirecting to fallback buffer. ");
+
                 let len = data.len();
                 if write {
                     print!(
-                        "E1000: Writing {:x} bytes to BAR0 at {:x}: {:x?} ->",
+                        "Writing {:x} bytes at {:x}: {:x?} ->",
                         len,
                         offset,
-                        &self.leftover_data[offset..offset + len]
+                        &self.fallback_buffer[offset..offset + len]
                     );
 
-                    self.leftover_data[offset..offset + len].copy_from_slice(data);
+                    self.fallback_buffer[offset..offset + len].copy_from_slice(data);
                 } else {
-                    print!("E1000: Reading {:x} bytes from BAR0 at {:x}:", len, offset);
-                    data.copy_from_slice(&self.leftover_data[offset..offset + len]);
+                    print!("Reading {:x} bytes at {:x}:", len, offset);
+                    data.copy_from_slice(&self.fallback_buffer[offset..offset + len]);
                 }
                 println!(" {:x?}", data);
             }
@@ -105,11 +84,34 @@ impl Device for E1000 {
 }
 
 impl E1000 {
-    fn ctrl_access(&mut self, _write: bool) {
-        println!("E1000: Ctrl access: {:?}", self.ctrl);
-        if self.ctrl.SLU {
-            self.status.LU = true;
+    fn reset_e1000(&mut self) {
+        self.regs = Default::default();
+        self.fallback_buffer = [0; 0x20000];
+        // Set to test mac
+        // x2-... is in locally administered range and should hopefully not conflict with anything
+        self.set_mac([0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+    }
+
+    fn ctrl_access(&mut self, write: bool) {
+        if !write {
+            return;
         }
+
+        if self.regs.ctrl.RST {
+            println!("E1000: Reset by driver.");
+            self.reset_e1000();
+            return;
+        }
+
+        if self.regs.ctrl.SLU {
+            println!("E1000: Link up.");
+            self.regs.status.LU = true;
+        }
+    }
+
+    fn set_mac(&mut self, mac: [u8; 6]) {
+        self.regs.ral0.receive_address_low = u32::from_be_bytes([mac[0], mac[1], mac[2], mac[3]]);
+        self.regs.rah0.receive_address_high = u16::from_be_bytes([mac[4], mac[5]]);
     }
 }
 

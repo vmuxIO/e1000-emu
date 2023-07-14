@@ -1,18 +1,90 @@
 // Allow naming fields by their official all upper case abbreviations
 #![allow(non_snake_case)]
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::Result;
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
+
+use crate::util::match_and_access_registers;
+use crate::E1000;
+
+#[derive(Default, Debug)]
+pub struct Registers {
+    pub ctrl: Control,
+    pub status: Status,
+
+    // Receive descriptor
+    pub rd_ba_l: DescriptorBaseAddressLow,
+    pub rd_ba_h: DescriptorBaseAddressHigh,
+    pub rd_len: DescriptorLength,
+    pub rd_h: DescriptorHead,
+    pub rd_t: DescriptorTail,
+
+    // Transmit descriptor
+    pub td_ba_l: DescriptorBaseAddressLow,
+    pub td_ba_h: DescriptorBaseAddressHigh,
+    pub td_len: DescriptorLength,
+    pub td_h: DescriptorHead,
+    pub td_t: DescriptorTail,
+
+    // Receive Address 0, Ethernet MAC address
+    pub ral0: ReceiveAddressLow,
+    pub rah0: ReceiveAddressHigh,
+}
+
+impl E1000 {
+    pub fn access_register(
+        &mut self, offset: u32, data: &mut [u8], write: bool,
+    ) -> Option<Result<()>> {
+        // While we could alternatively match offsets to registers and call .access(data, write)
+        // after the match, that would require an additional match just to invoke actions
+        // e.g. for controlling registers and registers that clear after read
+        let result = match_and_access_registers!( offset, data, write, true, {
+            // Offset => Register ( => and also do )
+            0x0 => self.regs.ctrl => { self.ctrl_access(write) },
+            0x8 => self.regs.status,
+
+            // Receive descriptor
+            0x2800 => self.regs.rd_ba_l,
+            0x2804 => self.regs.rd_ba_h,
+            0x2808 => self.regs.rd_len,
+            0x2810 => self.regs.rd_h,
+            0x2818 => self.regs.rd_t,
+
+            // Transmit descriptor
+            0x3800 => self.regs.td_ba_l,
+            0x3804 => self.regs.td_ba_h,
+            0x3808 => self.regs.td_len,
+            0x3810 => self.regs.rd_h,
+            0x3818 => self.regs.td_t,
+
+            // Receive Address 0, Ethernet MAC address
+            0x5400 => self.regs.ral0,
+            0x5404 => self.regs.rah0,
+        } else {
+            // Wildcard, if none of the above match
+            return None;
+        });
+
+        Some(result)
+    }
+}
 
 #[allow(unused_variables)]
 pub trait Register {
     // read also has mutable reference to self since there are fields that clear after read
-    fn read(&mut self, data: &mut [u8]) -> Result<()> {
-        Err(anyhow!("Read not implemented"))
-    }
-    fn write(&mut self, data: &[u8]) -> Result<()> {
-        Err(anyhow!("Write not implemented"))
+    fn read(&mut self) -> Result<[u8; 4]>;
+    fn write(&mut self, data: [u8; 4]) -> Result<()>;
+
+    fn access(&mut self, data: &mut [u8], write: bool) -> Result<()> {
+        if write {
+            let mut buffer = [0u8; 4];
+            buffer.copy_from_slice(&data[..4]);
+            self.write(buffer)?;
+        } else {
+            data[..4].copy_from_slice(self.read()?.as_slice());
+        }
+        Ok(())
     }
 }
 
@@ -20,28 +92,27 @@ impl<T> Register for T
 where
     T: PackedStruct<ByteArray = [u8; 4]> + Clone,
 {
-    fn read(&mut self, data: &mut [u8]) -> Result<()> {
-        ensure!(data.len() == 4);
-        let mut reg = self.pack().unwrap();
+    fn read(&mut self) -> Result<[u8; 4]> {
+        let mut reg = self.pack()?;
         reg.reverse(); // TODO: Figure out why it needs reversal
-        data.copy_from_slice(reg.as_slice());
-        Ok(())
+        Ok(reg)
     }
 
-    fn write(&mut self, data: &[u8]) -> Result<()> {
-        ensure!(data.len() == 4);
-        let mut reg = [data[0], data[1], data[2], data[3]];
-        reg.reverse(); // TODO: Figure out why it needs reversal
-        self.clone_from(&T::unpack(&reg).unwrap());
+    fn write(&mut self, mut data: [u8; 4]) -> Result<()> {
+        data.reverse(); // TODO: Figure out why it needs reversal
+        self.clone_from(&T::unpack(&data)?);
         Ok(())
     }
 }
 
 #[derive(PackedStruct, Clone, Default, Debug)]
 #[packed_struct(bit_numbering = "lsb0", size_bytes = "4")]
-pub struct Ctrl {
+pub struct Control {
     #[packed_field(bits = "6")]
     pub SLU: bool, // Set link up
+
+    #[packed_field(bits = "26")]
+    pub RST: bool, // Device Reset
 }
 
 #[derive(PackedStruct, Clone, Default, Debug)]
@@ -49,4 +120,55 @@ pub struct Ctrl {
 pub struct Status {
     #[packed_field(bits = "1")]
     pub LU: bool, // Link up
+}
+
+// Descriptor register layouts, used by rx and tx descriptor registers
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+pub struct DescriptorBaseAddressLow {
+    #[packed_field(bits = "4:31")]
+    pub base_address_low: u32,
+}
+
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+pub struct DescriptorBaseAddressHigh {
+    #[packed_field(bits = "0:31")]
+    pub base_address_high: u32,
+}
+
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+pub struct DescriptorLength {
+    #[packed_field(bits = "7:19")]
+    pub length: u16,
+}
+
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+pub struct DescriptorHead {
+    #[packed_field(bits = "0:15")]
+    pub head: u16,
+}
+
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+pub struct DescriptorTail {
+    #[packed_field(bits = "0:15")]
+    pub tail: u16,
+}
+
+// Receive Address
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+pub struct ReceiveAddressLow {
+    #[packed_field(bits = "0:31")]
+    pub receive_address_low: u32,
+}
+
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+pub struct ReceiveAddressHigh {
+    #[packed_field(bits = "0:15")]
+    pub receive_address_high: u16,
 }
