@@ -8,22 +8,29 @@ use crate::registers::*;
 mod registers;
 mod util;
 
-#[derive(Debug)]
 pub struct E1000 {
+    ctx: DeviceContext,
     regs: Registers,
     fallback_buffer: [u8; 0x20000],
 }
 
-impl Default for E1000 {
-    fn default() -> Self {
-        Self {
+impl Device for E1000 {
+    fn new(ctx: DeviceContext) -> Self {
+        E1000 {
+            ctx,
             regs: Default::default(),
             fallback_buffer: [0; 0x20000],
         }
     }
-}
 
-impl Device for E1000 {
+    fn ctx(&self) -> &DeviceContext {
+        &self.ctx
+    }
+
+    fn ctx_mut(&mut self) -> &mut DeviceContext {
+        &mut self.ctx
+    }
+
     fn log(&self, level: i32, msg: &str) {
         if level <= 6 {
             println!("libvfio-user log: {} - {}", level, msg);
@@ -122,6 +129,7 @@ fn main() {
 
     let config = DeviceConfigurator::default()
         .socket_path(socket.parse().unwrap())
+        .overwrite_socket(true)
         .pci_type(PciType::Pci)
         .pci_config(PciConfig {
             vendor_id: 0x8086, // Intel 82540EM Gigabit Ethernet Controller
@@ -154,12 +162,12 @@ fn main() {
         .build()
         .unwrap();
 
-    let ctx = config.produce::<E1000>().unwrap();
+    let e1000 = config.produce::<E1000>().unwrap();
     println!("VFU context created successfully");
 
     println!("Attaching...");
-    ctx.attach().unwrap().unwrap();
+    e1000.ctx().attach().unwrap().unwrap();
 
     println!("Running...");
-    ctx.run().unwrap();
+    e1000.ctx().run().unwrap();
 }
