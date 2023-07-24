@@ -96,7 +96,7 @@ impl E1000 {
         self.fallback_buffer = [0; 0x20000];
         // Set to test mac
         // x2-... is in locally administered range and should hopefully not conflict with anything
-        self.set_mac([0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+        self.regs.set_mac([0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
     }
 
     fn ctrl_access(&mut self, write: bool) {
@@ -114,11 +114,6 @@ impl E1000 {
             println!("E1000: Link up.");
             self.regs.status.LU = true;
         }
-    }
-
-    fn set_mac(&mut self, mac: [u8; 6]) {
-        self.regs.ral0.receive_address_low = u32::from_be_bytes([mac[0], mac[1], mac[2], mac[3]]);
-        self.regs.rah0.receive_address_high = u16::from_be_bytes([mac[4], mac[5]]);
     }
 }
 

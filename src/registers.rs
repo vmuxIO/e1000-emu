@@ -32,6 +32,13 @@ pub struct Registers {
     pub rah0: ReceiveAddressHigh,
 }
 
+impl Registers {
+    pub fn set_mac(&mut self, mac: [u8; 6]) {
+        self.ral0.receive_address_low = u32::from_le_bytes([mac[0], mac[1], mac[2], mac[3]]);
+        self.rah0.receive_address_high = u16::from_le_bytes([mac[4], mac[5]]);
+    }
+}
+
 impl E1000 {
     pub fn access_register(
         &mut self, offset: u32, data: &mut [u8], write: bool,
@@ -94,12 +101,12 @@ where
 {
     fn read(&mut self) -> Result<[u8; 4]> {
         let mut reg = self.pack()?;
-        reg.reverse(); // TODO: Figure out why it needs reversal
+        reg.reverse(); // Reverse because of endianness
         Ok(reg)
     }
 
     fn write(&mut self, mut data: [u8; 4]) -> Result<()> {
-        data.reverse(); // TODO: Figure out why it needs reversal
+        data.reverse(); // Reverse because of endianness
         self.clone_from(&T::unpack(&data)?);
         Ok(())
     }
@@ -124,35 +131,35 @@ pub struct Status {
 
 // Descriptor register layouts, used by rx and tx descriptor registers
 #[derive(PackedStruct, Clone, Default, Debug)]
-#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
 pub struct DescriptorBaseAddressLow {
     #[packed_field(bits = "4:31")]
     pub base_address_low: u32,
 }
 
 #[derive(PackedStruct, Clone, Default, Debug)]
-#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
 pub struct DescriptorBaseAddressHigh {
     #[packed_field(bits = "0:31")]
     pub base_address_high: u32,
 }
 
 #[derive(PackedStruct, Clone, Default, Debug)]
-#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
 pub struct DescriptorLength {
     #[packed_field(bits = "7:19")]
     pub length: u16,
 }
 
 #[derive(PackedStruct, Clone, Default, Debug)]
-#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
 pub struct DescriptorHead {
     #[packed_field(bits = "0:15")]
     pub head: u16,
 }
 
 #[derive(PackedStruct, Clone, Default, Debug)]
-#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
 pub struct DescriptorTail {
     #[packed_field(bits = "0:15")]
     pub tail: u16,
@@ -160,14 +167,14 @@ pub struct DescriptorTail {
 
 // Receive Address
 #[derive(PackedStruct, Clone, Default, Debug)]
-#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
 pub struct ReceiveAddressLow {
     #[packed_field(bits = "0:31")]
     pub receive_address_low: u32,
 }
 
 #[derive(PackedStruct, Clone, Default, Debug)]
-#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "lsb")]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
 pub struct ReceiveAddressHigh {
     #[packed_field(bits = "0:15")]
     pub receive_address_high: u16,
