@@ -1,10 +1,15 @@
+use std::collections::HashMap;
 use std::os::fd::AsRawFd;
 
+use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
 use tempfile::tempfile;
 
+use crate::descriptors::{DescriptorRing, ReceiveDescriptor};
 use crate::registers::*;
+use crate::util::dummy_frame;
 
+mod descriptors;
 mod registers;
 mod util;
 
@@ -12,6 +17,9 @@ pub struct E1000 {
     ctx: DeviceContext,
     regs: Registers,
     fallback_buffer: [u8; 0x20000],
+
+    rx_ring: Option<DescriptorRing<ReceiveDescriptor>>,
+    packet_buffers: HashMap<u64, DmaMapping>,
 }
 
 impl Device for E1000 {
@@ -20,6 +28,8 @@ impl Device for E1000 {
             ctx,
             regs: Default::default(),
             fallback_buffer: [0; 0x20000],
+            rx_ring: None,
+            packet_buffers: Default::default(),
         }
     }
 
@@ -115,6 +125,51 @@ impl E1000 {
             self.regs.status.LU = true;
         }
     }
+
+    fn rctl_access(&mut self, write: bool) {
+        if !write {
+            return;
+        }
+
+        if self.regs.rctl.EN {
+            println!("E1000: Initializing RX.");
+            self.initialize_rx_ring();
+
+            // Test receive
+            self.receive_dummy();
+        }
+    }
+
+    fn rdt_access(&mut self, write: bool) {
+        if !write {
+            return;
+        }
+
+        match &mut self.rx_ring {
+            None => {
+                // RDT was just initialized
+            }
+            Some(rx_ring) => {
+                // Software is done with the received packet(s)
+                rx_ring.tail = self.regs.rd_t.tail as usize;
+            }
+        }
+    }
+
+    fn receive_dummy(&mut self) {
+        let ring = self.rx_ring.as_mut().unwrap();
+        let mut descriptor = ring.read_head().unwrap();
+
+        let mapping = self.packet_buffers.get_mut(&descriptor.buffer).unwrap();
+        let buffer = mapping.dma_mut(0);
+
+        let frame = dummy_frame();
+        buffer[..frame.len()].copy_from_slice(&frame);
+        descriptor.status.descriptor_done = true;
+        descriptor.length = frame.len() as u16;
+
+        ring.write_and_advance_head(descriptor).unwrap();
+    }
 }
 
 fn main() {
@@ -154,6 +209,7 @@ fn main() {
             write: true,
             memory: false,
         })
+        .setup_dma(true)
         .build()
         .unwrap();
 

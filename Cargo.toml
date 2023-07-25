@@ -15,6 +15,7 @@ libvfio-user = { git = "https://github.com/vmuxIO/libvfio-user-rs.git", features
 # Raw bindings to libvfio-user useful for testing functions before they are integrated into the wrapper crate above
 #libvfio-user-sys = { path = "../libvfio-user-rs/libvfio-user-sys" }
 
-tempfile = "3.6.0"
+tempfile = "3.7.0"
 anyhow = "1.0.72"
 packed_struct = "0.10.1"
+etherparse = "0.13.0"

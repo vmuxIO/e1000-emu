@@ -12,6 +12,7 @@ use crate::E1000;
 pub struct Registers {
     pub ctrl: Control,
     pub status: Status,
+    pub rctl: ReceiveControl,
 
     // Receive descriptor
     pub rd_ba_l: DescriptorBaseAddressLow,
@@ -37,6 +38,12 @@ impl Registers {
         self.ral0.receive_address_low = u32::from_le_bytes([mac[0], mac[1], mac[2], mac[3]]);
         self.rah0.receive_address_high = u16::from_le_bytes([mac[4], mac[5]]);
     }
+
+    pub fn get_receive_descriptor_base_address(&self) -> u64 {
+        let low = (self.rd_ba_l.base_address_low as u64) << 4;
+        let high = (self.rd_ba_h.base_address_high as u64) << 32;
+        low | high
+    }
 }
 
 impl E1000 {
@@ -50,13 +57,14 @@ impl E1000 {
             // Offset => Register ( => and also do )
             0x0 => self.regs.ctrl => { self.ctrl_access(write) },
             0x8 => self.regs.status,
+            0x100 => self.regs.rctl => { self.rctl_access(write) },
 
             // Receive descriptor
             0x2800 => self.regs.rd_ba_l,
             0x2804 => self.regs.rd_ba_h,
             0x2808 => self.regs.rd_len,
             0x2810 => self.regs.rd_h,
-            0x2818 => self.regs.rd_t,
+            0x2818 => self.regs.rd_t => { self.rdt_access(write) },
 
             // Transmit descriptor
             0x3800 => self.regs.td_ba_l,
@@ -79,8 +87,7 @@ impl E1000 {
 
 #[allow(unused_variables)]
 pub trait Register {
-    // read also has mutable reference to self since there are fields that clear after read
-    fn read(&mut self) -> Result<[u8; 4]>;
+    fn read(&self) -> Result<[u8; 4]>;
     fn write(&mut self, data: [u8; 4]) -> Result<()>;
 
     fn access(&mut self, data: &mut [u8], write: bool) -> Result<()> {
@@ -99,7 +106,7 @@ impl<T> Register for T
 where
     T: PackedStruct<ByteArray = [u8; 4]> + Clone,
 {
-    fn read(&mut self) -> Result<[u8; 4]> {
+    fn read(&self) -> Result<[u8; 4]> {
         let mut reg = self.pack()?;
         reg.reverse(); // Reverse because of endianness
         Ok(reg)
@@ -127,6 +134,13 @@ pub struct Control {
 pub struct Status {
     #[packed_field(bits = "1")]
     pub LU: bool, // Link up
+}
+
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4")]
+pub struct ReceiveControl {
+    #[packed_field(bits = "1")]
+    pub EN: bool, // Receiver Enable
 }
 
 // Descriptor register layouts, used by rx and tx descriptor registers
