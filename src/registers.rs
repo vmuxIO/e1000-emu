@@ -13,6 +13,7 @@ pub struct Registers {
     pub ctrl: Control,
     pub status: Status,
     pub rctl: ReceiveControl,
+    pub tctl: TransmitControl,
 
     // Receive descriptor
     pub rd_ba_l: DescriptorBaseAddressLow,
@@ -44,6 +45,12 @@ impl Registers {
         let high = (self.rd_ba_h.base_address_high as u64) << 32;
         low | high
     }
+
+    pub fn get_transmit_descriptor_base_address(&self) -> u64 {
+        let low = (self.td_ba_l.base_address_low as u64) << 4;
+        let high = (self.td_ba_h.base_address_high as u64) << 32;
+        low | high
+    }
 }
 
 impl E1000 {
@@ -58,6 +65,7 @@ impl E1000 {
             0x0 => self.regs.ctrl => { self.ctrl_access(write) },
             0x8 => self.regs.status,
             0x100 => self.regs.rctl => { self.rctl_access(write) },
+            0x400 => self.regs.tctl => { self.tctl_access(write) },
 
             // Receive descriptor
             0x2800 => self.regs.rd_ba_l,
@@ -71,7 +79,7 @@ impl E1000 {
             0x3804 => self.regs.td_ba_h,
             0x3808 => self.regs.td_len,
             0x3810 => self.regs.rd_h,
-            0x3818 => self.regs.td_t,
+            0x3818 => self.regs.td_t => { self.tdt_access(write) },
 
             // Receive Address 0, Ethernet MAC address
             0x5400 => self.regs.ral0,
@@ -141,6 +149,13 @@ pub struct Status {
 pub struct ReceiveControl {
     #[packed_field(bits = "1")]
     pub EN: bool, // Receiver Enable
+}
+
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4")]
+pub struct TransmitControl {
+    #[packed_field(bits = "1")]
+    pub EN: bool, // Transmit Enable
 }
 
 // Descriptor register layouts, used by rx and tx descriptor registers

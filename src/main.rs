@@ -5,7 +5,7 @@ use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
 use tempfile::tempfile;
 
-use crate::descriptors::{DescriptorRing, ReceiveDescriptor};
+use crate::descriptors::*;
 use crate::registers::*;
 use crate::util::dummy_frame;
 
@@ -19,6 +19,7 @@ pub struct E1000 {
     fallback_buffer: [u8; 0x20000],
 
     rx_ring: Option<DescriptorRing<ReceiveDescriptor>>,
+    tx_ring: Option<DescriptorRing<TransmitDescriptor>>,
     packet_buffers: HashMap<u64, DmaMapping>,
 }
 
@@ -29,6 +30,7 @@ impl Device for E1000 {
             regs: Default::default(),
             fallback_buffer: [0; 0x20000],
             rx_ring: None,
+            tx_ring: None,
             packet_buffers: Default::default(),
         }
     }
@@ -140,6 +142,17 @@ impl E1000 {
         }
     }
 
+    fn tctl_access(&mut self, write: bool) {
+        if !write {
+            return;
+        }
+
+        if self.regs.tctl.EN {
+            println!("E1000: Initializing TX.");
+            self.initialize_tx_ring();
+        }
+    }
+
     fn rdt_access(&mut self, write: bool) {
         if !write {
             return;
@@ -156,6 +169,41 @@ impl E1000 {
         }
     }
 
+    fn tdt_access(&mut self, write: bool) {
+        if !write {
+            return;
+        }
+
+        match &mut self.tx_ring {
+            None => {
+                // TDT was just initialized
+            }
+            Some(tx_ring) => {
+                // Software wants to transmit packets
+                tx_ring.tail = self.regs.td_t.tail as usize;
+
+                while !tx_ring.is_empty() {
+                    println!("Transmit frame.");
+                    let mut changed_descriptor = tx_ring.read_head().unwrap();
+
+                    // Null descriptors should only occur in *receive* descriptor padding
+                    assert_ne!(
+                        changed_descriptor.buffer, 0,
+                        "Transmit descriptor buffer is null"
+                    );
+
+                    // Done processing, report if requested
+                    if changed_descriptor.cmd_rs {
+                        changed_descriptor.status_dd = true;
+                        tx_ring.write_and_advance_head(changed_descriptor).unwrap();
+                    } else {
+                        tx_ring.advance_head();
+                    }
+                }
+            }
+        }
+    }
+
     fn receive_dummy(&mut self) {
         let ring = self.rx_ring.as_mut().unwrap();
         let mut descriptor = ring.read_head().unwrap();
@@ -165,8 +213,9 @@ impl E1000 {
 
         let frame = dummy_frame();
         buffer[..frame.len()].copy_from_slice(&frame);
-        descriptor.status.descriptor_done = true;
         descriptor.length = frame.len() as u16;
+        descriptor.status_eop = true;
+        descriptor.status_dd = true;
 
         ring.write_and_advance_head(descriptor).unwrap();
     }
