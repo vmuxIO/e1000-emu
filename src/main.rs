@@ -109,13 +109,14 @@ impl E1000 {
         // Set to test mac
         // x2-... is in locally administered range and should hopefully not conflict with anything
         self.regs.set_mac([0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+
+        // Remove previous rx, tx rings and the buffers they pointed at
+        self.rx_ring = None;
+        self.tx_ring = None;
+        self.packet_buffers = Default::default();
     }
 
-    fn ctrl_access(&mut self, write: bool) {
-        if !write {
-            return;
-        }
-
+    fn ctrl_write(&mut self) {
         if self.regs.ctrl.RST {
             println!("E1000: Reset by driver.");
             self.reset_e1000();
@@ -128,11 +129,7 @@ impl E1000 {
         }
     }
 
-    fn rctl_access(&mut self, write: bool) {
-        if !write {
-            return;
-        }
-
+    fn rctl_write(&mut self) {
         if self.regs.rctl.EN {
             println!("E1000: Initializing RX.");
             self.initialize_rx_ring();
@@ -142,22 +139,14 @@ impl E1000 {
         }
     }
 
-    fn tctl_access(&mut self, write: bool) {
-        if !write {
-            return;
-        }
-
+    fn tctl_write(&mut self) {
         if self.regs.tctl.EN {
             println!("E1000: Initializing TX.");
             self.initialize_tx_ring();
         }
     }
 
-    fn rdt_access(&mut self, write: bool) {
-        if !write {
-            return;
-        }
-
+    fn rdt_write(&mut self) {
         match &mut self.rx_ring {
             None => {
                 // RDT was just initialized
@@ -169,11 +158,7 @@ impl E1000 {
         }
     }
 
-    fn tdt_access(&mut self, write: bool) {
-        if !write {
-            return;
-        }
-
+    fn tdt_write(&mut self) {
         match &mut self.tx_ring {
             None => {
                 // TDT was just initialized

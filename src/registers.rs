@@ -62,24 +62,24 @@ impl E1000 {
         // e.g. for controlling registers and registers that clear after read
         let result = match_and_access_registers!( offset, data, write, true, {
             // Offset => Register ( => and also do )
-            0x0 => self.regs.ctrl => { self.ctrl_access(write) },
+            0x0 => self.regs.ctrl => { if write { self.ctrl_write() } },
             0x8 => self.regs.status,
-            0x100 => self.regs.rctl => { self.rctl_access(write) },
-            0x400 => self.regs.tctl => { self.tctl_access(write) },
+            0x100 => self.regs.rctl => { if write { self.rctl_write() } },
+            0x400 => self.regs.tctl => { if write { self.tctl_write() } },
 
             // Receive descriptor
             0x2800 => self.regs.rd_ba_l,
             0x2804 => self.regs.rd_ba_h,
             0x2808 => self.regs.rd_len,
             0x2810 => self.regs.rd_h,
-            0x2818 => self.regs.rd_t => { self.rdt_access(write) },
+            0x2818 => self.regs.rd_t => { if write { self.rdt_write() } },
 
             // Transmit descriptor
             0x3800 => self.regs.td_ba_l,
             0x3804 => self.regs.td_ba_h,
             0x3808 => self.regs.td_len,
             0x3810 => self.regs.rd_h,
-            0x3818 => self.regs.td_t => { self.tdt_access(write) },
+            0x3818 => self.regs.td_t => { if write { self.tdt_write() } },
 
             // Receive Address 0, Ethernet MAC address
             0x5400 => self.regs.ral0,
