@@ -6,10 +6,12 @@ use libvfio_user::*;
 use tempfile::tempfile;
 
 use crate::descriptors::*;
+use crate::net::Interface;
 use crate::registers::*;
 use crate::util::dummy_frame;
 
 mod descriptors;
+mod net;
 mod registers;
 mod util;
 
@@ -21,10 +23,14 @@ pub struct E1000 {
     rx_ring: Option<DescriptorRing<ReceiveDescriptor>>,
     tx_ring: Option<DescriptorRing<TransmitDescriptor>>,
     packet_buffers: HashMap<u64, DmaMapping>,
+
+    interface: Interface,
 }
 
 impl Device for E1000 {
     fn new(ctx: DeviceContext) -> Self {
+        let interface = Interface::initialize();
+
         E1000 {
             ctx,
             regs: Default::default(),
@@ -32,6 +38,7 @@ impl Device for E1000 {
             rx_ring: None,
             tx_ring: None,
             packet_buffers: Default::default(),
+            interface,
         }
     }
 
@@ -176,6 +183,15 @@ impl E1000 {
                         changed_descriptor.buffer, 0,
                         "Transmit descriptor buffer is null"
                     );
+
+                    // Send packet/frame
+                    let mapping = self
+                        .packet_buffers
+                        .get_mut(&changed_descriptor.buffer)
+                        .unwrap();
+                    let length = changed_descriptor.length as usize;
+                    let buffer = &mapping.dma(0)[..length];
+                    self.interface.send(buffer);
 
                     // Done processing, report if requested
                     if changed_descriptor.cmd_rs {
