@@ -3,6 +3,7 @@ use std::os::fd::AsRawFd;
 
 use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
+use polling::{Event, PollMode, Poller};
 use tempfile::tempfile;
 
 use crate::descriptors::*;
@@ -260,15 +261,55 @@ fn main() {
             memory: false,
         })
         .setup_dma(true)
+        .non_blocking(true)
         .build()
         .unwrap();
 
     let e1000 = config.produce::<E1000>().unwrap();
     println!("VFU context created successfully");
 
+    // Use same poller and event list for both attach and run
+    let poller = Poller::new().unwrap();
+    let mut events = vec![];
+
+    // 1. Wait for client to attach
+
     println!("Attaching...");
-    e1000.ctx().attach().unwrap().unwrap();
+    poller.add(&e1000.ctx, Event::all(0)).unwrap();
+
+    loop {
+        events.clear();
+        poller.wait(&mut events, None).unwrap();
+
+        match e1000.ctx.attach().unwrap() {
+            Some(_) => {
+                break;
+            }
+            None => {
+                // Renew fd, not using Edge mode like we do below for run() since
+                // attach probably succeeds fine the first time
+                poller.modify(&e1000.ctx, Event::all(0)).unwrap();
+            }
+        }
+    }
+    // Fd is auto-removed from poller since it polled in the default Oneshot mode
+
+    // 2. Process client requests
 
     println!("Running...");
-    e1000.ctx().run().unwrap();
+    // Removed and now adding it again since file descriptor may change after attach
+    // Poll in Edge mode to avoid having to set interest again and again
+    poller
+        .add_with_mode(&e1000.ctx, Event::all(1), PollMode::Edge)
+        .unwrap();
+    loop {
+        events.clear();
+        poller.wait(&mut events, None).unwrap();
+
+        for _ in &events {
+            e1000.ctx().run().unwrap();
+        }
+    }
+    // Fd would need to be removed if break is added in the future
+    //poller.delete(&e1000.ctx).unwrap();
 }
