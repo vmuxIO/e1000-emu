@@ -78,7 +78,7 @@ impl E1000 {
             0x3800 => self.regs.td_ba_l,
             0x3804 => self.regs.td_ba_h,
             0x3808 => self.regs.td_len,
-            0x3810 => self.regs.rd_h,
+            0x3810 => self.regs.td_h,
             0x3818 => self.regs.td_t => { if write { self.tdt_write() } },
 
             // Receive Address 0, Ethernet MAC address

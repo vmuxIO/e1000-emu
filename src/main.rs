@@ -201,14 +201,15 @@ impl E1000 {
                     } else {
                         tx_ring.advance_head();
                     }
+                    self.regs.td_h.head = tx_ring.head as u16;
                 }
             }
         }
     }
 
     fn receive_dummy(&mut self) {
-        let ring = self.rx_ring.as_mut().unwrap();
-        let mut descriptor = ring.read_head().unwrap();
+        let rx_ring = self.rx_ring.as_mut().unwrap();
+        let mut descriptor = rx_ring.read_head().unwrap();
 
         let mapping = self.packet_buffers.get_mut(&descriptor.buffer).unwrap();
         let buffer = mapping.dma_mut(0);
@@ -219,7 +220,8 @@ impl E1000 {
         descriptor.status_eop = true;
         descriptor.status_dd = true;
 
-        ring.write_and_advance_head(descriptor).unwrap();
+        rx_ring.write_and_advance_head(descriptor).unwrap();
+        self.regs.rd_h.head = rx_ring.head as u16;
     }
 }
 

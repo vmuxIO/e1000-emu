@@ -15,8 +15,8 @@ pub const DESCRIPTOR_LENGTH: usize = 16;
 pub struct DescriptorRing<T> {
     mapping: DmaMapping,
     length: usize,
-    head: usize, // Managed by structure
-    pub tail: usize,
+    pub head: usize, // Managed by structure
+    pub tail: usize, // Updated by client
     phantom: PhantomData<T>,
 }
 
