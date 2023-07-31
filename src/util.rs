@@ -38,7 +38,7 @@ macro_rules! match_and_access_registers {
 
 pub(crate) use match_and_access_registers;
 
-pub fn dummy_frame() -> Vec<u8> {
+pub fn _dummy_frame() -> Vec<u8> {
     let builder = PacketBuilder::ethernet2([1, 2, 3, 4, 5, 6], [1, 2, 3, 4, 5, 6])
         .ipv4([192, 168, 0, 1], [192, 168, 0, 2], 64)
         .icmpv4_echo_request(1234, 5678);

@@ -1,17 +1,32 @@
+use std::io::ErrorKind;
+use std::os::fd::{AsRawFd, RawFd};
 use std::process::Command;
 
+use libc::c_int;
 use tun_tap::{Iface, Mode};
 
-const INTERFACE_NAME: &str = "emutap%d";
-const INTERFACE_IP: &str = "172.16.12.34/32";
+// Start name with "tap" to avoid systemd-networkd from managing it (if configured this way)
+const INTERFACE_NAME: &str = "tapemu%d";
+// Route whole ip range to aid testing since host kernel automatically replies to
+// pings to 10.1.0.1 but will route 10.1.0.2 to tap interface
+const INTERFACE_IP: &str = "10.1.0.1/24";
 
 pub struct Interface {
     interface: Iface,
 }
 
 impl Interface {
-    pub fn initialize() -> Self {
+    pub fn initialize(non_blocking: bool) -> Self {
         let interface = Iface::without_packet_info(INTERFACE_NAME, Mode::Tap).unwrap();
+
+        if non_blocking {
+            // TODO: Try PR to tun_tap crate to directly expose non-blocking setting
+            let mut non_block_flag: c_int = 1; // 0: Blocking, 1: Non-blocking
+            let ret =
+                unsafe { libc::ioctl(interface.as_raw_fd(), libc::FIONBIO, &mut non_block_flag) };
+            assert_eq!(ret, 0, "Setting interface to non-blocking failed.");
+        }
+
         Command::new("ip")
             .args(["address", "add", INTERFACE_IP, "dev", interface.name()])
             .spawn()
@@ -31,14 +46,27 @@ impl Interface {
         Interface { interface }
     }
 
-    pub fn send(&self, buffer: &[u8]) {
-        match self.interface.send(buffer) {
-            Ok(length) => {
-                println!("Interface: Sent {} bytes", length);
-            }
+    pub fn send(&self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.interface.send(buffer)
+    }
+
+    pub fn receive(&self, buffer: &mut [u8]) -> std::io::Result<Option<usize>> {
+        // Instead of returning WouldBlock error, return None
+        match self.interface.recv(buffer) {
+            Ok(length) => Ok(Some(length)),
             Err(err) => {
-                println!("Interface: Send error: {}", err);
+                if err.kind() == ErrorKind::WouldBlock {
+                    Ok(None)
+                } else {
+                    Err(err)
+                }
             }
         }
+    }
+}
+
+impl AsRawFd for Interface {
+    fn as_raw_fd(&self) -> RawFd {
+        self.interface.as_raw_fd()
     }
 }

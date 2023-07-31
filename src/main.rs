@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
 
+use anyhow::{Context, Result};
 use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
 use polling::{Event, PollMode, Poller};
@@ -9,7 +10,6 @@ use tempfile::tempfile;
 use crate::descriptors::*;
 use crate::net::Interface;
 use crate::registers::*;
-use crate::util::dummy_frame;
 
 mod descriptors;
 mod net;
@@ -30,7 +30,7 @@ pub struct E1000 {
 
 impl Device for E1000 {
     fn new(ctx: DeviceContext) -> Self {
-        let interface = Interface::initialize();
+        let interface = Interface::initialize(true);
 
         E1000 {
             ctx,
@@ -141,9 +141,6 @@ impl E1000 {
         if self.regs.rctl.EN {
             println!("E1000: Initializing RX.");
             self.initialize_rx_ring();
-
-            // Test receive
-            self.receive_dummy();
         }
     }
 
@@ -176,7 +173,6 @@ impl E1000 {
                 tx_ring.tail = self.regs.td_t.tail as usize;
 
                 while !tx_ring.is_empty() {
-                    println!("Transmit frame.");
                     let mut changed_descriptor = tx_ring.read_head().unwrap();
 
                     // Null descriptors should only occur in *receive* descriptor padding
@@ -192,7 +188,7 @@ impl E1000 {
                         .unwrap();
                     let length = changed_descriptor.length as usize;
                     let buffer = &mapping.dma(0)[..length];
-                    self.interface.send(buffer);
+                    self.interface.send(buffer).unwrap();
 
                     // Done processing, report if requested
                     if changed_descriptor.cmd_rs {
@@ -207,21 +203,38 @@ impl E1000 {
         }
     }
 
-    fn receive_dummy(&mut self) {
-        let rx_ring = self.rx_ring.as_mut().unwrap();
-        let mut descriptor = rx_ring.read_head().unwrap();
+    // Receive available frames and place them inside rx-ring
+    fn receive(&mut self) -> Result<()> {
+        let rx_ring = self
+            .rx_ring
+            .as_mut()
+            .context("RX Ring not yet initialized")?;
 
-        let mapping = self.packet_buffers.get_mut(&descriptor.buffer).unwrap();
-        let buffer = mapping.dma_mut(0);
+        loop {
+            let mut descriptor = rx_ring.read_head()?;
 
-        let frame = dummy_frame();
-        buffer[..frame.len()].copy_from_slice(&frame);
-        descriptor.length = frame.len() as u16;
-        descriptor.status_eop = true;
-        descriptor.status_dd = true;
+            let mapping = self
+                .packet_buffers
+                .get_mut(&descriptor.buffer)
+                .context("Packet buffer not found")?;
+            let buffer = mapping.dma_mut(0);
 
-        rx_ring.write_and_advance_head(descriptor).unwrap();
-        self.regs.rd_h.head = rx_ring.head as u16;
+            let length = match self.interface.receive(buffer)? {
+                Some(length) => length,
+                None => {
+                    break;
+                }
+            };
+
+            descriptor.length = length as u16;
+            descriptor.status_eop = true;
+            descriptor.status_dd = true;
+
+            rx_ring.write_and_advance_head(descriptor)?;
+            self.regs.rd_h.head = rx_ring.head as u16;
+        }
+
+        Ok(())
     }
 }
 
@@ -267,17 +280,23 @@ fn main() {
         .build()
         .unwrap();
 
-    let e1000 = config.produce::<E1000>().unwrap();
+    let mut e1000 = config.produce::<E1000>().unwrap();
     println!("VFU context created successfully");
 
     // Use same poller and event list for both attach and run
     let poller = Poller::new().unwrap();
     let mut events = vec![];
 
+    const EVENT_KEY_ATTACH: usize = 0;
+    const EVENT_KEY_RUN: usize = 1;
+    const EVENT_KEY_RECEIVE: usize = 2;
+
     // 1. Wait for client to attach
 
     println!("Attaching...");
-    poller.add(&e1000.ctx, Event::all(0)).unwrap();
+    poller
+        .add(&e1000.ctx, Event::all(EVENT_KEY_ATTACH))
+        .unwrap();
 
     loop {
         events.clear();
@@ -290,7 +309,9 @@ fn main() {
             None => {
                 // Renew fd, not using Edge mode like we do below for run() since
                 // attach probably succeeds fine the first time
-                poller.modify(&e1000.ctx, Event::all(0)).unwrap();
+                poller
+                    .modify(&e1000.ctx, Event::all(EVENT_KEY_ATTACH))
+                    .unwrap();
             }
         }
     }
@@ -302,16 +323,38 @@ fn main() {
     // Removed and now adding it again since file descriptor may change after attach
     // Poll in Edge mode to avoid having to set interest again and again
     poller
-        .add_with_mode(&e1000.ctx, Event::all(1), PollMode::Edge)
+        .add_with_mode(&e1000.ctx, Event::all(EVENT_KEY_RUN), PollMode::Edge)
         .unwrap();
+    poller
+        .add_with_mode(
+            &e1000.interface,
+            Event::all(EVENT_KEY_RECEIVE),
+            PollMode::Edge,
+        )
+        .unwrap();
+
     loop {
         events.clear();
         poller.wait(&mut events, None).unwrap();
 
-        for _ in &events {
-            e1000.ctx().run().unwrap();
+        for event in &events {
+            match event.key {
+                EVENT_KEY_RUN => {
+                    e1000.ctx().run().unwrap();
+                }
+                EVENT_KEY_RECEIVE => match e1000.receive() {
+                    Ok(_) => {}
+                    Err(err) => {
+                        println!("Error handling receive event, skipping ({})", err);
+                    }
+                },
+                x => {
+                    unreachable!("Unknown event key {}", x);
+                }
+            }
         }
     }
     // Fd would need to be removed if break is added in the future
     //poller.delete(&e1000.ctx).unwrap();
+    //poller.delete(&e1000.interface).unwrap();
 }
