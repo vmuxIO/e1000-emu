@@ -134,6 +134,7 @@ impl E1000 {
         if self.regs.ctrl.SLU {
             println!("E1000: Link up.");
             self.regs.status.LU = true;
+            self.report_lsc();
         }
     }
 
@@ -210,6 +211,7 @@ impl E1000 {
             .as_mut()
             .context("RX Ring not yet initialized")?;
 
+        let mut has_received_packets = false;
         loop {
             let mut descriptor = rx_ring.read_head()?;
 
@@ -232,9 +234,39 @@ impl E1000 {
 
             rx_ring.write_and_advance_head(descriptor)?;
             self.regs.rd_h.head = rx_ring.head as u16;
+
+            has_received_packets = true;
+        }
+        if has_received_packets {
+            // Workaround: Report rxt0 even though we don't emulate any timer
+            self.report_rxt0();
         }
 
         Ok(())
+    }
+
+    fn interrupt(&mut self) {
+        println!(
+            "Triggering interrupt, set causes: {:?}",
+            self.regs.interrupt_cause
+        );
+        self.ctx.trigger_irq(0).unwrap();
+    }
+
+    // Link Status Change
+    fn report_lsc(&mut self) {
+        if self.regs.interrupt_mask.LSC {
+            self.regs.interrupt_cause.LSC = true;
+            self.interrupt();
+        }
+    }
+
+    // Link Status Change
+    fn report_rxt0(&mut self) {
+        if self.regs.interrupt_mask.RXT0 {
+            self.regs.interrupt_cause.RXT0 = true;
+            self.interrupt();
+        }
     }
 }
 
@@ -275,6 +307,7 @@ fn main() {
             write: true,
             memory: false,
         })
+        .using_interrupt_requests(InterruptRequestKind::Msi, 1)
         .setup_dma(true)
         .non_blocking(true)
         .build()

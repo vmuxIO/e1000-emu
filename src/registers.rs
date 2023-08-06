@@ -10,8 +10,16 @@ use crate::E1000;
 
 #[derive(Default, Debug)]
 pub struct Registers {
+    // General control and status
     pub ctrl: Control,
     pub status: Status,
+
+    // Interrupts
+    pub interrupt_cause: InterruptCauses,
+    pub interrupt_mask: InterruptCauses,
+    interrupt_mask_set: InterruptCauses, // Required because of indirect mask writes via IMS, IMC
+
+    // Receive and Transmit Control
     pub rctl: ReceiveControl,
     pub tctl: TransmitControl,
 
@@ -51,6 +59,38 @@ impl Registers {
         let high = (self.td_ba_h.base_address_high as u64) << 32;
         low | high
     }
+
+    // IMS and IMC do not directly set mask but instead just set what bits to enable/disable
+    fn update_interrupt_mask(&mut self, clear: bool) {
+        let value = if clear { false } else { true };
+
+        // TODO: Maybe pack registers back into bytes and use bit wise ops instead?
+        if self.interrupt_mask_set.TXDW {
+            self.interrupt_mask.TXDW = value;
+        }
+        if self.interrupt_mask_set.TXQE {
+            self.interrupt_mask.TXQE = value;
+        }
+        if self.interrupt_mask_set.LSC {
+            self.interrupt_mask.LSC = value;
+        }
+        if self.interrupt_mask_set.RXDMT0 {
+            self.interrupt_mask.RXDMT0 = value;
+        }
+        if self.interrupt_mask_set.RXT0 {
+            self.interrupt_mask.RXT0 = value;
+        }
+
+        println!(
+            "Updated interrupt mask, with clear={}, now: {:?}",
+            clear, self.interrupt_mask
+        );
+    }
+}
+
+fn clear(register: &mut impl Default) {
+    *register = Default::default();
+    println!("Cleared register.");
 }
 
 impl E1000 {
@@ -60,10 +100,23 @@ impl E1000 {
         // While we could alternatively match offsets to registers and call .access(data, write)
         // after the match, that would require an additional match just to invoke actions
         // e.g. for controlling registers and registers that clear after read
+        // So instead do it in one go using custom macro
         let result = match_and_access_registers!( offset, data, write, true, {
             // Offset => Register ( => and also do )
             0x0 => self.regs.ctrl => { if write { self.ctrl_write() } },
             0x8 => self.regs.status,
+
+            // ICR for reading and clearing interrupts, no writes
+            0xC0 => self.regs.interrupt_cause => { clear(&mut self.regs.interrupt_cause) },
+            // ICS for writing (and triggering interrupts)
+            0xC8 => self.regs.interrupt_cause => { eprintln!("ICS not yet implemented!") },
+            // IMS for reading interrupt mask (read) and for enabling interrupts (write)
+            0xD0 if !write => self.regs.interrupt_mask,
+            0xD0 => self.regs.interrupt_mask_set => { self.regs.update_interrupt_mask(false) },
+            // IMC for disabling interrupts (only write)
+            0xD8 => self.regs.interrupt_mask_set => { self.regs.update_interrupt_mask(true) },
+
+            // Receive and Transmit Control
             0x100 => self.regs.rctl => { if write { self.rctl_write() } },
             0x400 => self.regs.tctl => { if write { self.tctl_write() } },
 
@@ -127,6 +180,7 @@ where
     }
 }
 
+// General control and status
 #[derive(PackedStruct, Clone, Default, Debug)]
 #[packed_struct(bit_numbering = "lsb0", size_bytes = "4")]
 pub struct Control {
@@ -144,6 +198,27 @@ pub struct Status {
     pub LU: bool, // Link up
 }
 
+// Interrupt register layouts, shared by ICR, ICS, IMS, IMC
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4")]
+pub struct InterruptCauses {
+    #[packed_field(bits = "0")]
+    pub TXDW: bool, // Transmit Descriptor written back
+
+    #[packed_field(bits = "1")]
+    pub TXQE: bool, // Transmit Queue Empty
+
+    #[packed_field(bits = "2")]
+    pub LSC: bool, // Link Status Change
+
+    #[packed_field(bits = "4")]
+    pub RXDMT0: bool, // Receive Descriptor Minimum Threshold Reached
+
+    #[packed_field(bits = "7")]
+    pub RXT0: bool, // Receive Timer Interrupt
+} // Omitted a lot more causes, which are not yet emulated
+
+// Rx and Tx
 #[derive(PackedStruct, Clone, Default, Debug)]
 #[packed_struct(bit_numbering = "lsb0", size_bytes = "4")]
 pub struct ReceiveControl {

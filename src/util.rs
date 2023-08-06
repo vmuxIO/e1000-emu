@@ -4,11 +4,11 @@ use etherparse::PacketBuilder;
 // and optional debugging including field names, since some registers share the same struct type
 macro_rules! match_and_access_registers {
     ($offset:expr, $data:expr, $write:expr, $debug:expr,
-    { $( $reg_offset:expr => $reg:expr $( => $do:block )? ),* $(,)? }
+    { $( $reg_offset:pat $(if $guard:expr)? => $reg:expr $( => $do:block )? ),* $(,)? }
     else $catch:block ) => {
         match $offset {
             $(
-                $reg_offset => {
+                $reg_offset $(if $guard)? => {
                     if $debug {
                         print!("Register Debug: ");
                         if $write {
