@@ -2,7 +2,6 @@ use std::io::ErrorKind;
 use std::os::fd::{AsRawFd, RawFd};
 use std::process::Command;
 
-use libc::c_int;
 use tun_tap::{Iface, Mode};
 
 // Start name with "tap" to avoid systemd-networkd from managing it (if configured this way)
@@ -20,11 +19,7 @@ impl Interface {
         let interface = Iface::without_packet_info(INTERFACE_NAME, Mode::Tap).unwrap();
 
         if non_blocking {
-            // TODO: Try PR to tun_tap crate to directly expose non-blocking setting
-            let mut non_block_flag: c_int = 1; // 0: Blocking, 1: Non-blocking
-            let ret =
-                unsafe { libc::ioctl(interface.as_raw_fd(), libc::FIONBIO, &mut non_block_flag) };
-            assert_eq!(ret, 0, "Setting interface to non-blocking failed.");
+            interface.set_non_blocking().unwrap();
         }
 
         Command::new("ip")
