@@ -1,11 +1,9 @@
 use std::collections::HashMap;
-use std::os::fd::AsRawFd;
 
 use anyhow::{Context, Result};
 use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
 use polling::{Event, PollMode, Poller};
-use tempfile::tempfile;
 
 use crate::descriptors::*;
 use crate::net::Interface;
@@ -20,6 +18,7 @@ pub struct E1000 {
     ctx: DeviceContext,
     regs: Registers,
     fallback_buffer: [u8; 0x20000],
+    io_addr: u32,
 
     rx_ring: Option<DescriptorRing<ReceiveDescriptor>>,
     tx_ring: Option<DescriptorRing<TransmitDescriptor>>,
@@ -36,6 +35,7 @@ impl Device for E1000 {
             ctx,
             regs: Default::default(),
             fallback_buffer: [0; 0x20000],
+            io_addr: 0,
             rx_ring: None,
             tx_ring: None,
             packet_buffers: Default::default(),
@@ -107,6 +107,41 @@ impl Device for E1000 {
         }
 
         Ok(data.len())
+    }
+
+    // Bar1 IO proxies access to bar0
+    fn region_access_bar1(
+        &mut self, offset: usize, data: &mut [u8], write: bool,
+    ) -> std::result::Result<usize, i32> {
+        const IO_REGISTER_SIZE: usize = 4;
+
+        if data.len() != IO_REGISTER_SIZE {
+            eprintln!("Unsupported bar1 access size {:x}", data.len());
+            return Err(22); //EINVAL
+        }
+
+        match offset {
+            0 => {
+                // IOADDR: Set where to read/write from/to
+                match write {
+                    true => {
+                        let mut buffer = [0u8; IO_REGISTER_SIZE];
+                        buffer.copy_from_slice(data);
+                        self.io_addr = u32::from_le_bytes(buffer);
+                    }
+                    false => data.copy_from_slice(self.io_addr.to_le_bytes().as_slice()),
+                }
+                Ok(IO_REGISTER_SIZE)
+            }
+            4 => {
+                // IODATA: Access data at previously written IOADDR
+                self.region_access_bar0(self.io_addr as usize, data, write)
+            }
+            x => {
+                eprintln!("Unsupported bar1 access at offset {:x}", x);
+                Err(22) //EINVAL
+            }
+        }
     }
 }
 
@@ -273,8 +308,6 @@ impl E1000 {
 fn main() {
     let socket = "/tmp/e1000-emu.sock";
 
-    let temp_bar1 = tempfile().unwrap();
-
     let config = DeviceConfigurator::default()
         .socket_path(socket.parse().unwrap())
         .overwrite_socket(true)
@@ -301,7 +334,7 @@ fn main() {
         .add_device_region(DeviceRegion {
             region_type: DeviceRegionKind::Bar1,
             size: 0x40, // 64 B
-            file_descriptor: temp_bar1.as_raw_fd(),
+            file_descriptor: -1,
             offset: 0,
             read: true,
             write: true,
