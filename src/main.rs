@@ -6,10 +6,12 @@ use libvfio_user::*;
 use polling::{Event, PollMode, Poller};
 
 use crate::descriptors::*;
+use crate::eeprom::EepromInterface;
 use crate::net::Interface;
 use crate::registers::*;
 
 mod descriptors;
+mod eeprom;
 mod net;
 mod registers;
 mod util;
@@ -19,6 +21,7 @@ pub struct E1000 {
     regs: Registers,
     fallback_buffer: [u8; 0x20000],
     io_addr: u32,
+    eeprom: EepromInterface,
 
     rx_ring: Option<DescriptorRing<ReceiveDescriptor>>,
     tx_ring: Option<DescriptorRing<TransmitDescriptor>>,
@@ -36,6 +39,7 @@ impl Device for E1000 {
             regs: Default::default(),
             fallback_buffer: [0; 0x20000],
             io_addr: 0,
+            eeprom: Default::default(),
             rx_ring: None,
             tx_ring: None,
             packet_buffers: Default::default(),
@@ -151,7 +155,8 @@ impl E1000 {
         self.fallback_buffer = [0; 0x20000];
         // Set to test mac
         // x2-... is in locally administered range and should hopefully not conflict with anything
-        self.regs.set_mac([0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+        self.regs
+            .set_mac(self.eeprom.initial_eeprom.ethernet_address());
 
         // Remove previous rx, tx rings and the buffers they pointed at
         self.rx_ring = None;
@@ -348,6 +353,13 @@ fn main() {
 
     let mut e1000 = config.produce::<E1000>().unwrap();
     println!("VFU context created successfully");
+
+    // Setup initial eeprom, should not be changed afterwards
+    e1000
+        .eeprom
+        .initial_eeprom
+        .set_ethernet_address([0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+    e1000.eeprom.pack_initial_eeprom();
 
     // Use same poller and event list for both attach and run
     let poller = Poller::new().unwrap();

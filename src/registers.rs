@@ -3,6 +3,7 @@
 
 use anyhow::Result;
 use packed_struct::derive::PackedStruct;
+use packed_struct::prelude::{packed_bits, ReservedOne};
 use packed_struct::PackedStruct;
 
 use crate::util::match_and_access_registers;
@@ -13,6 +14,9 @@ pub struct Registers {
     // General control and status
     pub ctrl: Control,
     pub status: Status,
+
+    // Eeprom Control & Data
+    pub eecd: EepromControlAndData,
 
     // Interrupts
     pub interrupt_cause: InterruptCauses,
@@ -97,14 +101,24 @@ impl E1000 {
     pub fn access_register(
         &mut self, offset: u32, data: &mut [u8], write: bool,
     ) -> Option<Result<()>> {
+        let mut debug = true;
+
+        // Exclude registers which are accessed thousands of times from debug output
+        if offset == 0x8 || offset == 0x10 {
+            debug = false;
+        }
+
         // While we could alternatively match offsets to registers and call .access(data, write)
         // after the match, that would require an additional match just to invoke actions
         // e.g. for controlling registers and registers that clear after read
         // So instead do it in one go using custom macro
-        let result = match_and_access_registers!( offset, data, write, true, {
+        let result = match_and_access_registers!( offset, data, write, debug, {
             // Offset => Register ( => and also do )
             0x0 => self.regs.ctrl => { if write { self.ctrl_write() } },
             0x8 => self.regs.status,
+
+            // Eeprom Control & Data
+            0x10 => self.regs.eecd => { if write { self.eecd_write() } },
 
             // ICR for reading and clearing interrupts, no writes
             0xC0 => self.regs.interrupt_cause => { clear(&mut self.regs.interrupt_cause) },
@@ -282,4 +296,31 @@ pub struct ReceiveAddressLow {
 pub struct ReceiveAddressHigh {
     #[packed_field(bits = "0:15")]
     pub receive_address_high: u16,
+}
+
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
+pub struct EepromControlAndData {
+    #[packed_field(bits = "0")]
+    pub SK: bool, // Clock input
+
+    #[packed_field(bits = "1")]
+    pub CS: bool, // Chip select
+
+    #[packed_field(bits = "2")]
+    pub DI: bool, // Data input
+
+    #[packed_field(bits = "3")]
+    pub DO: bool, // Data output
+
+    // Omit FWE (Flash Write Enable Control) to leave it at 00b -> Not allowed
+    #[packed_field(bits = "6")]
+    pub EE_REQ: bool, // Request EEPROM Access
+
+    // Eeprom always present and accessible
+    #[packed_field(bits = "7")]
+    pub EE_GNT: ReservedOne<packed_bits::Bits<1>>, // Grant EEPROM Access
+
+    #[packed_field(bits = "8")]
+    pub EE_PRES: ReservedOne<packed_bits::Bits<1>>, // EEPROM Present
 }
