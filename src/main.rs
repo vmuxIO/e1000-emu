@@ -179,23 +179,24 @@ impl E1000 {
     }
 
     fn rctl_write(&mut self) {
-        if self.regs.rctl.EN {
-            println!("E1000: Initializing RX.");
-            self.initialize_rx_ring();
+        if self.regs.rctl.EN && self.rx_ring.is_none() {
+            self.setup_rx_ring();
         }
     }
 
     fn tctl_write(&mut self) {
-        if self.regs.tctl.EN {
-            println!("E1000: Initializing TX.");
-            self.initialize_tx_ring();
+        if self.regs.tctl.EN && self.tx_ring.is_none() {
+            self.setup_tx_ring();
         }
     }
 
     fn rdt_write(&mut self) {
         match &mut self.rx_ring {
             None => {
-                // RDT was just initialized
+                // RDT was just initialized, if rx is enabled try to initialize ring
+                if self.regs.rctl.EN {
+                    self.setup_rx_ring();
+                }
             }
             Some(rx_ring) => {
                 // Software is done with the received packet(s)
@@ -207,7 +208,10 @@ impl E1000 {
     fn tdt_write(&mut self) {
         match &mut self.tx_ring {
             None => {
-                // TDT was just initialized
+                // TDT was just initialized, if tx is enabled try to initialize ring
+                if self.regs.tctl.EN {
+                    self.setup_tx_ring();
+                }
             }
             Some(tx_ring) => {
                 // Software wants to transmit packets

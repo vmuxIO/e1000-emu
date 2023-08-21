@@ -6,10 +6,15 @@ use libvfio_user::dma::DmaMapping;
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
 
+use crate::util::is_all_zeros;
 use crate::E1000;
 
 // Each descriptor is 16 bytes long, 8 for buffer address, rest for status, length, etc...
-pub const DESCRIPTOR_LENGTH: usize = 16;
+const DESCRIPTOR_LENGTH: usize = 16;
+
+// Size of each descriptor's buffer is automatically determined by distance between buffer pointers,
+// fallback size for when there is only one descriptor
+const DESCRIPTOR_BUFFER_FALLBACK_SIZE: u64 = 1920; // Default size linux kernel driver uses
 
 #[derive(Debug)]
 pub struct DescriptorRing<T> {
@@ -103,15 +108,19 @@ where
 impl E1000 {
     fn read_ring_and_descriptors<T>(
         &mut self, base_address: usize, length: usize, head: usize, tail: usize,
-    ) -> DescriptorRing<T>
+    ) -> Result<Option<DescriptorRing<T>>>
     where
         T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]> + Descriptor,
     {
         // 1. Read ring
         let mapping = self
             .ctx
-            .map_range(base_address, length * DESCRIPTOR_LENGTH, 1, true, true)
-            .unwrap();
+            .dma_map(base_address, length * DESCRIPTOR_LENGTH, 1, true, true)?;
+
+        // Ring buffer might not yet be filled
+        if is_all_zeros(mapping.dma(0)) {
+            return Ok(None);
+        }
 
         let ring = DescriptorRing::<T> {
             mapping,
@@ -122,48 +131,50 @@ impl E1000 {
         };
 
         // 2. Read descriptors to populate packet buffer
-        let descriptors = ring.read_all_descriptors().unwrap();
+        let descriptors = ring.read_all_descriptors()?;
+        let len = find_descriptor_distance(&descriptors).unwrap_or(DESCRIPTOR_BUFFER_FALLBACK_SIZE)
+            as usize;
+
         for descriptor in descriptors {
             // Skip null descriptors used for padding
             if descriptor.buffer() == 0 {
                 continue;
             }
 
-            let len = self
-                .ctx
-                .dma_regions()
-                .get(&(descriptor.buffer() as usize))
-                .unwrap();
             let mapping = self
                 .ctx
-                .map_range(descriptor.buffer() as usize, *len, 1, true, true)
-                .unwrap();
+                .dma_map(descriptor.buffer() as usize, len, 1, true, true)?;
+            // TODO: Remove previous ring descriptor mappings, if driver changes them
             self.packet_buffers.insert(descriptor.buffer(), mapping);
         }
 
-        ring
+        Ok(Some(ring))
     }
 
-    pub fn initialize_rx_ring(&mut self) {
-        let ring = self.read_ring_and_descriptors::<ReceiveDescriptor>(
-            self.regs.get_receive_descriptor_base_address() as usize,
-            self.regs.rd_len.length as usize * 8,
-            self.regs.rd_h.head as usize,
-            self.regs.rd_t.tail as usize,
-        );
-        println!("Initialized rx ring {:?}", ring);
-        self.rx_ring = Some(ring);
+    pub fn setup_rx_ring(&mut self) {
+        println!("E1000: Trying to initialize RX ring.");
+        self.rx_ring = self
+            .read_ring_and_descriptors::<ReceiveDescriptor>(
+                self.regs.get_receive_descriptor_base_address() as usize,
+                self.regs.rd_len.length as usize * 8,
+                self.regs.rd_h.head as usize,
+                self.regs.rd_t.tail as usize,
+            )
+            .unwrap();
+        println!("Set rx ring to {:?}", self.rx_ring);
     }
 
-    pub fn initialize_tx_ring(&mut self) {
-        let ring = self.read_ring_and_descriptors::<TransmitDescriptor>(
-            self.regs.get_transmit_descriptor_base_address() as usize,
-            self.regs.td_len.length as usize * 8,
-            self.regs.td_h.head as usize,
-            self.regs.td_t.tail as usize,
-        );
-        println!("Initialized tx ring {:?}", ring);
-        self.tx_ring = Some(ring);
+    pub fn setup_tx_ring(&mut self) {
+        println!("E1000: Trying to initialize TX ring.");
+        self.tx_ring = self
+            .read_ring_and_descriptors::<TransmitDescriptor>(
+                self.regs.get_transmit_descriptor_base_address() as usize,
+                self.regs.td_len.length as usize * 8,
+                self.regs.td_h.head as usize,
+                self.regs.td_t.tail as usize,
+            )
+            .unwrap();
+        println!("Set tx ring to {:?}", self.tx_ring);
     }
 }
 
@@ -221,4 +232,15 @@ impl Descriptor for TransmitDescriptor {
     fn buffer(&self) -> u64 {
         self.buffer
     }
+}
+
+// Find max distance between descriptor buffer pointers, provided they are allocated in succession
+fn find_descriptor_distance<T: Descriptor>(descriptors: &Vec<T>) -> Option<u64> {
+    let buffers: Vec<u64> = descriptors
+        .iter()
+        .map(|d| d.buffer())
+        .filter(|b| *b != 0)
+        .collect();
+
+    buffers.windows(2).map(|w| w[0].abs_diff(w[1])).min()
 }
