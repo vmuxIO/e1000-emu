@@ -66,24 +66,11 @@ impl Registers {
 
     // IMS and IMC do not directly set mask but instead just set what bits to enable/disable
     fn update_interrupt_mask(&mut self, clear: bool) {
-        let value = if clear { false } else { true };
+        let mask = u32::from_ne_bytes(self.interrupt_mask.pack().unwrap());
+        let update = u32::from_ne_bytes(self.interrupt_mask_set.pack().unwrap());
 
-        // TODO: Maybe pack registers back into bytes and use bit wise ops instead?
-        if self.interrupt_mask_set.TXDW {
-            self.interrupt_mask.TXDW = value;
-        }
-        if self.interrupt_mask_set.TXQE {
-            self.interrupt_mask.TXQE = value;
-        }
-        if self.interrupt_mask_set.LSC {
-            self.interrupt_mask.LSC = value;
-        }
-        if self.interrupt_mask_set.RXDMT0 {
-            self.interrupt_mask.RXDMT0 = value;
-        }
-        if self.interrupt_mask_set.RXT0 {
-            self.interrupt_mask.RXT0 = value;
-        }
+        let new_mask = if clear { mask & !update } else { mask | update };
+        self.interrupt_mask = InterruptCauses::unpack(&new_mask.to_ne_bytes()).unwrap();
 
         println!(
             "Updated interrupt mask, with clear={}, now: {:?}",
@@ -122,8 +109,8 @@ impl E1000 {
 
             // ICR for reading and clearing interrupts, no writes
             0xC0 => self.regs.interrupt_cause => { clear(&mut self.regs.interrupt_cause) },
-            // ICS for writing (and triggering interrupts)
-            0xC8 => self.regs.interrupt_cause => { eprintln!("ICS not yet implemented!") },
+            // ICS for writing (and triggering interrupts), no reads
+            0xC8 => self.regs.interrupt_cause => { self.ics_write() },
             // IMS for reading interrupt mask (read) and for enabling interrupts (write)
             0xD0 if !write => self.regs.interrupt_mask,
             0xD0 => self.regs.interrupt_mask_set => { self.regs.update_interrupt_mask(false) },

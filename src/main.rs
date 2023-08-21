@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
+use packed_struct::PackedStruct;
 use polling::{Event, PollMode, Poller};
 
 use crate::descriptors::*;
@@ -178,6 +179,19 @@ impl E1000 {
         }
     }
 
+    fn ics_write(&mut self) {
+        // Client can manually trigger interrupts through this register,
+        // Just have to check if they are masked off
+
+        // Check mask by checking if any bit is set, instead of comparing all fields
+        let cause = u32::from_ne_bytes(self.regs.interrupt_cause.pack().unwrap());
+        let mask = u32::from_ne_bytes(self.regs.interrupt_mask.pack().unwrap());
+
+        if cause & mask != 0 {
+            self.interrupt();
+        }
+    }
+
     fn rctl_write(&mut self) {
         if self.regs.rctl.EN && self.rx_ring.is_none() {
             self.setup_rx_ring();
@@ -349,6 +363,7 @@ fn main() {
             write: true,
             memory: false,
         })
+        .using_interrupt_requests(InterruptRequestKind::IntX, 1)
         .using_interrupt_requests(InterruptRequestKind::Msi, 1)
         .setup_dma(true)
         .non_blocking(true)
