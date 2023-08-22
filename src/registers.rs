@@ -18,6 +18,9 @@ pub struct Registers {
     // Eeprom Control & Data
     pub eecd: EepromControlAndData,
 
+    // Management Data Interface Control, for reading/writing PHY
+    pub mdic: MdiControl,
+
     // Interrupts
     pub interrupt_cause: InterruptCauses,
     pub interrupt_mask: InterruptCauses,
@@ -106,6 +109,9 @@ impl E1000 {
 
             // Eeprom Control & Data
             0x10 => self.regs.eecd => { if write { self.eecd_write() } },
+
+            // Management Data Interface Control, for reading/writing PHY
+            0x20 => self.regs.mdic => { if write { self.mdic_write() } },
 
             // ICR for reading and clearing interrupts, no writes
             0xC0 => self.regs.interrupt_cause => { clear(&mut self.regs.interrupt_cause) },
@@ -217,6 +223,9 @@ pub struct InterruptCauses {
 
     #[packed_field(bits = "7")]
     pub RXT0: bool, // Receive Timer Interrupt
+
+    #[packed_field(bits = "9")]
+    pub MDAC: bool, // MDI/O Access Complete
 } // Omitted a lot more causes, which are not yet emulated
 
 // Rx and Tx
@@ -286,7 +295,7 @@ pub struct ReceiveAddressHigh {
 }
 
 #[derive(PackedStruct, Clone, Default, Debug)]
-#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4")]
 pub struct EepromControlAndData {
     #[packed_field(bits = "0")]
     pub SK: bool, // Clock input
@@ -310,4 +319,24 @@ pub struct EepromControlAndData {
 
     #[packed_field(bits = "8")]
     pub EE_PRES: ReservedOne<packed_bits::Bits<1>>, // EEPROM Present
+}
+
+// Management Data Interface Control, for reading/writing PHY
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
+pub struct MdiControl {
+    #[packed_field(bits = "0:15")]
+    pub data: u16,
+
+    #[packed_field(bits = "16:20")]
+    pub register_address: u8, // PHY register address
+
+    #[packed_field(bits = "26:27")]
+    pub opcode: u8,
+
+    #[packed_field(bits = "28")]
+    pub ready: bool,
+
+    #[packed_field(bits = "29")]
+    pub interrupt_enable: bool,
 }

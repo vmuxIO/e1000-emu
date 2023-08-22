@@ -9,11 +9,13 @@ use polling::{Event, PollMode, Poller};
 use crate::descriptors::*;
 use crate::eeprom::EepromInterface;
 use crate::net::Interface;
+use crate::phy::Phy;
 use crate::registers::*;
 
 mod descriptors;
 mod eeprom;
 mod net;
+mod phy;
 mod registers;
 mod util;
 
@@ -23,6 +25,7 @@ pub struct E1000 {
     fallback_buffer: [u8; 0x20000],
     io_addr: u32,
     eeprom: EepromInterface,
+    phy: Phy,
 
     rx_ring: Option<DescriptorRing<ReceiveDescriptor>>,
     tx_ring: Option<DescriptorRing<TransmitDescriptor>>,
@@ -41,6 +44,7 @@ impl Device for E1000 {
             fallback_buffer: [0; 0x20000],
             io_addr: 0,
             eeprom: Default::default(),
+            phy: Default::default(),
             rx_ring: None,
             tx_ring: None,
             packet_buffers: Default::default(),
@@ -154,10 +158,9 @@ impl E1000 {
     fn reset_e1000(&mut self) {
         self.regs = Default::default();
         self.fallback_buffer = [0; 0x20000];
-        // Set to test mac
-        // x2-... is in locally administered range and should hopefully not conflict with anything
         self.regs
             .set_mac(self.eeprom.initial_eeprom.ethernet_address());
+        self.phy = Default::default();
 
         // Remove previous rx, tx rings and the buffers they pointed at
         self.rx_ring = None;
@@ -175,6 +178,7 @@ impl E1000 {
         if self.regs.ctrl.SLU {
             println!("E1000: Link up.");
             self.regs.status.LU = true;
+            self.phy.status.link_status = true;
             self.report_lsc();
         }
     }
@@ -326,6 +330,14 @@ impl E1000 {
             self.interrupt();
         }
     }
+
+    // MDI/O Access Complete
+    fn report_mdac(&mut self) {
+        if self.regs.interrupt_mask.MDAC {
+            self.regs.interrupt_cause.MDAC = true;
+            self.interrupt();
+        }
+    }
 }
 
 fn main() {
@@ -374,6 +386,9 @@ fn main() {
     println!("VFU context created successfully");
 
     // Setup initial eeprom, should not be changed afterwards
+
+    // Set to test mac
+    // x2-... is in locally administered range and should hopefully not conflict with anything
     e1000
         .eeprom
         .initial_eeprom
