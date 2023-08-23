@@ -1,7 +1,4 @@
-use std::collections::HashMap;
-
 use anyhow::{Context, Result};
-use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
 use packed_struct::PackedStruct;
 use polling::{Event, PollMode, Poller};
@@ -29,7 +26,6 @@ pub struct E1000 {
 
     rx_ring: Option<DescriptorRing<ReceiveDescriptor>>,
     tx_ring: Option<DescriptorRing<TransmitDescriptor>>,
-    packet_buffers: HashMap<u64, DmaMapping>,
 
     interface: Interface,
 }
@@ -47,7 +43,6 @@ impl Device for E1000 {
             phy: Default::default(),
             rx_ring: None,
             tx_ring: None,
-            packet_buffers: Default::default(),
             interface,
         }
     }
@@ -165,7 +160,6 @@ impl E1000 {
         // Remove previous rx, tx rings and the buffers they pointed at
         self.rx_ring = None;
         self.tx_ring = None;
-        self.packet_buffers = Default::default();
     }
 
     fn ctrl_write(&mut self) {
@@ -211,10 +205,7 @@ impl E1000 {
     fn rdt_write(&mut self) {
         match &mut self.rx_ring {
             None => {
-                // RDT was just initialized, if rx is enabled try to initialize ring
-                if self.regs.rctl.EN {
-                    self.setup_rx_ring();
-                }
+                // RDT was just initialized
             }
             Some(rx_ring) => {
                 // Software is done with the received packet(s)
@@ -226,17 +217,17 @@ impl E1000 {
     fn tdt_write(&mut self) {
         match &mut self.tx_ring {
             None => {
-                // TDT was just initialized, if tx is enabled try to initialize ring
-                if self.regs.tctl.EN {
-                    self.setup_tx_ring();
-                }
+                // TDT was just initialized
             }
-            Some(tx_ring) => {
+            Some(ref mut tx_ring) => {
                 // Software wants to transmit packets
                 tx_ring.tail = self.regs.td_t.tail as usize;
 
                 while !tx_ring.is_empty() {
                     let mut changed_descriptor = tx_ring.read_head().unwrap();
+                    if changed_descriptor.cmd_dext {
+                        todo!("Only legacy TX descriptors are currently supported");
+                    }
 
                     // Null descriptors should only occur in *receive* descriptor padding
                     assert_ne!(
@@ -245,9 +236,12 @@ impl E1000 {
                     );
 
                     // Send packet/frame
-                    let mapping = self
-                        .packet_buffers
-                        .get_mut(&changed_descriptor.buffer)
+                    let mapping = tx_ring
+                        .get_descriptor_mapping(
+                            &mut self.ctx,
+                            changed_descriptor.buffer,
+                            tx_ring.head,
+                        )
                         .unwrap();
                     let length = changed_descriptor.length as usize;
                     let buffer = &mapping.dma(0)[..length];
@@ -277,10 +271,8 @@ impl E1000 {
         loop {
             let mut descriptor = rx_ring.read_head()?;
 
-            let mapping = self
-                .packet_buffers
-                .get_mut(&descriptor.buffer)
-                .context("Packet buffer not found")?;
+            let mapping =
+                rx_ring.get_descriptor_mapping(&mut self.ctx, descriptor.buffer, rx_ring.head)?;
             let buffer = mapping.dma_mut(0);
 
             let length = match self.interface.receive(buffer)? {

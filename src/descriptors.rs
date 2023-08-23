@@ -1,24 +1,24 @@
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::slice::{ChunksExact, ChunksExactMut};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use libvfio_user::dma::DmaMapping;
+use libvfio_user::DeviceContext;
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
 
-use crate::util::is_all_zeros;
 use crate::E1000;
 
 // Each descriptor is 16 bytes long, 8 for buffer address, rest for status, length, etc...
 const DESCRIPTOR_LENGTH: usize = 16;
-
-// Size of each descriptor's buffer is automatically determined by distance between buffer pointers,
-// fallback size for when there is only one descriptor
-const DESCRIPTOR_BUFFER_FALLBACK_SIZE: u64 = 1920; // Default size linux kernel driver uses
+const DESCRIPTOR_BUFFER_SIZE: usize = 1920; // Default size linux kernel driver uses
 
 #[derive(Debug)]
 pub struct DescriptorRing<T> {
     mapping: DmaMapping,
+    descriptor_mappings: HashMap<usize, (u64, DmaMapping)>, // Index -> previous address, mapping
     length: usize,
     pub head: usize, // Managed by structure
     pub tail: usize, // Updated by client
@@ -49,19 +49,6 @@ where
 
         let descriptor = T::unpack(&data)?;
         Ok(descriptor)
-    }
-
-    fn read_all_descriptors(&self) -> Result<Vec<T>> {
-        let mut descriptors = vec![];
-
-        for chunk in self.ring_chunks() {
-            let mut buffer = [0u8; DESCRIPTOR_LENGTH];
-            buffer.copy_from_slice(chunk);
-            buffer.reverse(); // Reverse because of endianness
-
-            descriptors.push(T::unpack(&buffer)?);
-        }
-        Ok(descriptors)
     }
 
     fn write_descriptor(&mut self, desc: T, index: usize) -> Result<()> {
@@ -103,12 +90,47 @@ where
         self.advance_head();
         Ok(())
     }
+
+    pub fn get_descriptor_mapping(
+        &mut self, ctx: &mut DeviceContext, buffer_address: u64, index: usize,
+    ) -> Result<&mut DmaMapping> {
+        if buffer_address == 0 {
+            self.descriptor_mappings.remove(&index);
+            return Err(anyhow!("Descriptor buffer not setup"));
+        }
+
+        let mut new_mapping = || {
+            ctx.dma_map(
+                buffer_address as usize,
+                DESCRIPTOR_BUFFER_SIZE,
+                1,
+                true,
+                true,
+            )
+        };
+
+        match self.descriptor_mappings.entry(index) {
+            Entry::Occupied(entry) => {
+                let (previous_buffer, mapping) = entry.into_mut();
+
+                if *previous_buffer != buffer_address {
+                    *mapping = new_mapping()?;
+                }
+
+                Ok(mapping)
+            }
+            Entry::Vacant(entry) => {
+                let (_, mapping) = entry.insert((buffer_address, new_mapping()?));
+                Ok(mapping)
+            }
+        }
+    }
 }
 
 impl E1000 {
-    fn read_ring_and_descriptors<T>(
+    fn map_ring<T>(
         &mut self, base_address: usize, length: usize, head: usize, tail: usize,
-    ) -> Result<Option<DescriptorRing<T>>>
+    ) -> Result<DescriptorRing<T>>
     where
         T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]> + Descriptor,
     {
@@ -117,64 +139,42 @@ impl E1000 {
             .ctx
             .dma_map(base_address, length * DESCRIPTOR_LENGTH, 1, true, true)?;
 
-        // Ring buffer might not yet be filled
-        if is_all_zeros(mapping.dma(0)) {
-            return Ok(None);
-        }
-
         let ring = DescriptorRing::<T> {
             mapping,
+            descriptor_mappings: Default::default(),
             length,
             head,
             tail,
             phantom: PhantomData,
         };
 
-        // 2. Read descriptors to populate packet buffer
-        let descriptors = ring.read_all_descriptors()?;
-        let len = find_descriptor_distance(&descriptors).unwrap_or(DESCRIPTOR_BUFFER_FALLBACK_SIZE)
-            as usize;
-
-        for descriptor in descriptors {
-            // Skip null descriptors used for padding
-            if descriptor.buffer() == 0 {
-                continue;
-            }
-
-            let mapping = self
-                .ctx
-                .dma_map(descriptor.buffer() as usize, len, 1, true, true)?;
-            // TODO: Remove previous ring descriptor mappings, if driver changes them
-            self.packet_buffers.insert(descriptor.buffer(), mapping);
-        }
-
-        Ok(Some(ring))
+        Ok(ring)
     }
 
     pub fn setup_rx_ring(&mut self) {
-        println!("E1000: Trying to initialize RX ring.");
-        self.rx_ring = self
-            .read_ring_and_descriptors::<ReceiveDescriptor>(
+        println!("E1000: Initializing RX ring.");
+        self.rx_ring = Some(
+            self.map_ring::<ReceiveDescriptor>(
                 self.regs.get_receive_descriptor_base_address() as usize,
                 self.regs.rd_len.length as usize * 8,
                 self.regs.rd_h.head as usize,
                 self.regs.rd_t.tail as usize,
             )
-            .unwrap();
-        println!("Set rx ring to {:?}", self.rx_ring);
+            .unwrap(),
+        );
     }
 
     pub fn setup_tx_ring(&mut self) {
-        println!("E1000: Trying to initialize TX ring.");
-        self.tx_ring = self
-            .read_ring_and_descriptors::<TransmitDescriptor>(
+        println!("E1000: Initializing TX ring.");
+        self.tx_ring = Some(
+            self.map_ring::<TransmitDescriptor>(
                 self.regs.get_transmit_descriptor_base_address() as usize,
                 self.regs.td_len.length as usize * 8,
                 self.regs.td_h.head as usize,
                 self.regs.td_t.tail as usize,
             )
-            .unwrap();
-        println!("Set tx ring to {:?}", self.tx_ring);
+            .unwrap(),
+        );
     }
 }
 
@@ -223,6 +223,9 @@ pub struct TransmitDescriptor {
     #[packed_field(bits = "91")]
     pub cmd_rs: bool, // Report status, if set status_dd should be set after processing packet
 
+    #[packed_field(bits = "93")]
+    pub cmd_dext: bool, // Extension
+
     // Status field offset 96 bits
     #[packed_field(bits = "96")]
     pub status_dd: bool, // Descriptor Done
@@ -232,15 +235,4 @@ impl Descriptor for TransmitDescriptor {
     fn buffer(&self) -> u64 {
         self.buffer
     }
-}
-
-// Find max distance between descriptor buffer pointers, provided they are allocated in succession
-fn find_descriptor_distance<T: Descriptor>(descriptors: &Vec<T>) -> Option<u64> {
-    let buffers: Vec<u64> = descriptors
-        .iter()
-        .map(|d| d.buffer())
-        .filter(|b| *b != 0)
-        .collect();
-
-    buffers.windows(2).map(|w| w[0].abs_diff(w[1])).min()
 }

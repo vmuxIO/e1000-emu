@@ -51,7 +51,3 @@ pub fn _dummy_frame() -> Vec<u8> {
 
     frame
 }
-
-pub fn is_all_zeros(data: &[u8]) -> bool {
-    data.iter().all(|b| *b == 0)
-}
