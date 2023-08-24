@@ -245,7 +245,9 @@ impl E1000 {
                         .unwrap();
                     let length = changed_descriptor.length as usize;
                     let buffer = &mapping.dma(0)[..length];
-                    self.interface.send(buffer).unwrap();
+                    let sent = self.interface.send(buffer).unwrap();
+                    assert_eq!(length, sent, "Did not send specified packet length");
+                    eprintln!("E1000: Sent {} bytes!", sent);
 
                     // Done processing, report if requested
                     if changed_descriptor.cmd_rs {
@@ -281,8 +283,10 @@ impl E1000 {
                     break;
                 }
             };
+            eprintln!("E1000: Received {} bytes!", length);
 
-            descriptor.length = length as u16;
+            // With the linux kernel driver packets seem to be cut short 4 bytes, so increase length
+            descriptor.length = length as u16 + 4;
             descriptor.status_eop = true;
             descriptor.status_dd = true;
 
