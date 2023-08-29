@@ -7,7 +7,7 @@ use packed_struct::prelude::{packed_bits, ReservedOne};
 use packed_struct::PackedStruct;
 
 use crate::util::match_and_access_registers;
-use crate::E1000;
+use crate::{NicContext, E1000};
 
 #[derive(Default, Debug)]
 pub struct Registers {
@@ -87,7 +87,7 @@ fn clear(register: &mut impl Default) {
     println!("Cleared register.");
 }
 
-impl E1000 {
+impl<C: NicContext> E1000<C> {
     pub fn access_register(
         &mut self, offset: u32, data: &mut [u8], write: bool,
     ) -> Option<Result<()>> {

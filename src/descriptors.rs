@@ -9,7 +9,7 @@ use libvfio_user::DeviceContext;
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
 
-use crate::E1000;
+use crate::{NicContext, E1000};
 
 // Each descriptor is 16 bytes long, 8 for buffer address, rest for status, length, etc...
 const DESCRIPTOR_LENGTH: usize = 16;
@@ -127,7 +127,7 @@ where
     }
 }
 
-impl E1000 {
+impl<C: NicContext> E1000<C> {
     fn map_ring<T>(
         &mut self, base_address: usize, length: usize, head: usize, tail: usize,
     ) -> Result<DescriptorRing<T>>

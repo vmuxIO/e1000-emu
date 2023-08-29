@@ -4,18 +4,22 @@ use packed_struct::PackedStruct;
 
 use crate::descriptors::*;
 use crate::eeprom::EepromInterface;
-use crate::net::Interface;
 use crate::phy::Phy;
 use crate::registers::*;
 
 mod descriptors;
 mod eeprom;
-mod net;
 mod phy;
 mod registers;
 mod util;
 
-pub struct E1000 {
+pub trait NicContext {
+    // Send bytes from NIC
+    fn send(&self, buffer: &[u8]) -> Result<usize>;
+}
+
+pub struct E1000<C: NicContext> {
+    pub nic_ctx: Option<C>,
     pub ctx: DeviceContext,
     regs: Registers,
     fallback_buffer: [u8; 0x20000],
@@ -25,15 +29,12 @@ pub struct E1000 {
 
     rx_ring: Option<DescriptorRing<ReceiveDescriptor>>,
     tx_ring: Option<DescriptorRing<TransmitDescriptor>>,
-
-    pub interface: Interface,
 }
 
-impl Device for E1000 {
+impl<C: NicContext> Device for E1000<C> {
     fn new(ctx: DeviceContext) -> Self {
-        let interface = Interface::initialize(true);
-
         E1000 {
+            nic_ctx: None,
             ctx,
             regs: Default::default(),
             fallback_buffer: [0; 0x20000],
@@ -42,7 +43,6 @@ impl Device for E1000 {
             phy: Default::default(),
             rx_ring: None,
             tx_ring: None,
-            interface,
         }
     }
 
@@ -148,7 +148,7 @@ impl Device for E1000 {
     }
 }
 
-impl E1000 {
+impl<C: NicContext> E1000<C> {
     fn reset_e1000(&mut self) {
         self.regs = Default::default();
         self.fallback_buffer = [0; 0x20000];
@@ -244,7 +244,7 @@ impl E1000 {
                         .unwrap();
                     let length = changed_descriptor.length as usize;
                     let buffer = &mapping.dma(0)[..length];
-                    let sent = self.interface.send(buffer).unwrap();
+                    let sent = self.nic_ctx.as_ref().unwrap().send(buffer).unwrap();
                     assert_eq!(length, sent, "Did not send specified packet length");
                     eprintln!("E1000: Sent {} bytes!", sent);
 
@@ -261,43 +261,33 @@ impl E1000 {
         }
     }
 
-    // Receive available frames and place them inside rx-ring
-    pub fn receive(&mut self) -> Result<()> {
+    // Place received frame inside rx-ring
+    pub fn receive(&mut self, received: &[u8]) -> Result<()> {
+        assert!(received.len() > 0, "receive called with no data");
+
         let rx_ring = self
             .rx_ring
             .as_mut()
             .context("RX Ring not yet initialized")?;
 
-        let mut has_received_packets = false;
-        loop {
-            let mut descriptor = rx_ring.read_head()?;
+        let mut descriptor = rx_ring.read_head()?;
 
-            let mapping =
-                rx_ring.get_descriptor_mapping(&mut self.ctx, descriptor.buffer, rx_ring.head)?;
-            let buffer = mapping.dma_mut(0);
+        let mapping =
+            rx_ring.get_descriptor_mapping(&mut self.ctx, descriptor.buffer, rx_ring.head)?;
+        let buffer = mapping.dma_mut(0);
 
-            let length = match self.interface.receive(buffer)? {
-                Some(length) => length,
-                None => {
-                    break;
-                }
-            };
-            eprintln!("E1000: Received {} bytes!", length);
+        buffer[..received.len()].copy_from_slice(received);
 
-            // With the linux kernel driver packets seem to be cut short 4 bytes, so increase length
-            descriptor.length = length as u16 + 4;
-            descriptor.status_eop = true;
-            descriptor.status_dd = true;
+        // With the linux kernel driver packets seem to be cut short 4 bytes, so increase length
+        descriptor.length = received.len() as u16 + 4;
+        descriptor.status_eop = true;
+        descriptor.status_dd = true;
 
-            rx_ring.write_and_advance_head(descriptor)?;
-            self.regs.rd_h.head = rx_ring.head as u16;
+        rx_ring.write_and_advance_head(descriptor)?;
+        self.regs.rd_h.head = rx_ring.head as u16;
 
-            has_received_packets = true;
-        }
-        if has_received_packets {
-            // Workaround: Report rxt0 even though we don't emulate any timer
-            self.report_rxt0();
-        }
+        // Workaround: Report rxt0 even though we don't emulate any timer
+        self.report_rxt0();
 
         Ok(())
     }

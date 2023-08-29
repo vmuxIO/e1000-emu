@@ -1,9 +1,24 @@
+use anyhow::Result;
 use libvfio_user::*;
 use polling::{Event, PollMode, Poller};
 
-use e1000_emu::E1000;
+use crate::net::Interface;
+use e1000_emu::{NicContext, E1000};
+
+pub mod net;
+
+struct E1000Context {
+    interface: Interface,
+}
+
+impl NicContext for E1000Context {
+    fn send(&self, buffer: &[u8]) -> Result<usize> {
+        self.interface.send(buffer).map_err(anyhow::Error::msg)
+    }
+}
 
 fn main() {
+    // Initialize E1000
     let socket = "/tmp/e1000-emu.sock";
 
     let config = DeviceConfigurator::default()
@@ -45,8 +60,16 @@ fn main() {
         .build()
         .unwrap();
 
-    let mut e1000 = config.produce::<E1000>().unwrap();
+    let mut e1000 = config.produce::<E1000<E1000Context>>().unwrap();
     println!("VFU context created successfully");
+
+    // Initialize interface
+    let interface = Interface::initialize(true);
+    let mut interface_buffer = [0u8; 4096]; // Big enough
+
+    // Provide e1000 with context
+    let nic_ctx = E1000Context { interface };
+    e1000.nic_ctx = Some(nic_ctx);
 
     // Setup initial eeprom, should not be changed afterwards
 
@@ -102,7 +125,7 @@ fn main() {
         .unwrap();
     poller
         .add_with_mode(
-            &e1000.interface,
+            &e1000.nic_ctx.as_ref().unwrap().interface,
             Event::all(EVENT_KEY_RECEIVE),
             PollMode::Edge,
         )
@@ -117,10 +140,27 @@ fn main() {
                 EVENT_KEY_RUN => {
                     e1000.ctx().run().unwrap();
                 }
-                EVENT_KEY_RECEIVE => match e1000.receive() {
-                    Ok(_) => {}
-                    Err(err) => {
-                        println!("Error handling receive event, skipping ({})", err);
+                EVENT_KEY_RECEIVE => loop {
+                    match e1000
+                        .nic_ctx
+                        .as_ref()
+                        .unwrap()
+                        .interface
+                        .receive(&mut interface_buffer)
+                        .unwrap()
+                    {
+                        Some(len) => {
+                            println!("E1000: Received {} bytes!", len);
+                            match e1000.receive(&interface_buffer[..len]) {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    println!("Error handling receive event, skipping ({})", err);
+                                }
+                            }
+                        }
+                        None => {
+                            break;
+                        }
                     }
                 },
                 x => {

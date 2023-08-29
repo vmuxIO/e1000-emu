@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
 
-use crate::E1000;
+use crate::{NicContext, E1000};
 
 const MICROWIRE_OPCODE_READ: u8 = 0x6;
 // There is also write, erase, erase/write enable, erase/write disable opcodes
@@ -168,7 +168,7 @@ impl Default for EepromInterface {
     }
 }
 
-impl E1000 {
+impl<C: NicContext> E1000<C> {
     pub fn eecd_write(&mut self) {
         let mut wires = EepromWires {
             clock_input: self.regs.eecd.SK,
