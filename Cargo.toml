@@ -8,14 +8,14 @@ license = "MIT"
 
 [dependencies]
 # Latest git version of libvfio-user-rs
-libvfio-user = { git = "https://github.com/vmuxIO/libvfio-user-rs.git", features = ["patch-dma-limit"] }
+libvfio-user = { git = "https://github.com/vmuxIO/libvfio-user-rs.git", features = ["patch-dma-limit"], rev="e8a509a7327f8a30ee66b0868e9fa45077626f12" }
 # Local development version, with libvfio-user-rs being in the same parent directory
 #libvfio-user = { path = "../libvfio-user-rs/libvfio-user", features = ["patch-dma-limit"] }
 
 # Raw bindings to libvfio-user useful for testing functions before they are integrated into the wrapper crate above
 #libvfio-user-sys = { path = "../libvfio-user-rs/libvfio-user-sys" }
 
-anyhow = "1.0.72"
+anyhow = "1.0.75"
 packed_struct = "0.10.1"
 etherparse = "0.13.0"
 tun-tap = { version = "0.1.4", default-features = false, features = ["libc"] } # Exclude default tokio feature

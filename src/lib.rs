@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use libvfio_user::*;
 use packed_struct::PackedStruct;
 
 use crate::descriptors::*;
@@ -15,12 +14,16 @@ mod util;
 
 pub trait NicContext {
     // Send bytes from NIC
-    fn send(&self, buffer: &[u8]) -> Result<usize>;
+    fn send(&mut self, buffer: &[u8]) -> Result<usize>;
+
+    fn dma_read(&mut self, address: usize, buffer: &mut [u8]);
+    fn dma_write(&mut self, address: usize, buffer: &[u8]);
+
+    fn trigger_interrupt(&mut self);
 }
 
 pub struct E1000<C: NicContext> {
-    pub nic_ctx: Option<C>,
-    pub ctx: DeviceContext,
+    pub nic_ctx: C,
     regs: Registers,
     fallback_buffer: [u8; 0x20000],
     io_addr: u32,
@@ -31,11 +34,10 @@ pub struct E1000<C: NicContext> {
     tx_ring: Option<DescriptorRing<TransmitDescriptor>>,
 }
 
-impl<C: NicContext> Device for E1000<C> {
-    fn new(ctx: DeviceContext) -> Self {
+impl<C: NicContext> E1000<C> {
+    pub fn new(nic_ctx: C) -> Self {
         E1000 {
-            nic_ctx: None,
-            ctx,
+            nic_ctx,
             regs: Default::default(),
             fallback_buffer: [0; 0x20000],
             io_addr: 0,
@@ -46,27 +48,7 @@ impl<C: NicContext> Device for E1000<C> {
         }
     }
 
-    fn ctx(&self) -> &DeviceContext {
-        &self.ctx
-    }
-
-    fn ctx_mut(&mut self) -> &mut DeviceContext {
-        &mut self.ctx
-    }
-
-    fn log(&self, level: i32, msg: &str) {
-        if level <= 6 {
-            println!("libvfio-user log: {} - {}", level, msg);
-        }
-    }
-
-    fn reset(&mut self, reason: DeviceResetReason) -> Result<(), i32> {
-        println!("E1000: Resetting device, Reason: {:?}", reason);
-        self.reset_e1000();
-        Ok(())
-    }
-
-    fn region_access_bar0(
+    pub fn region_access_bar0(
         &mut self, offset: usize, data: &mut [u8], write: bool,
     ) -> Result<usize, i32> {
         // Check size and offset
@@ -113,7 +95,7 @@ impl<C: NicContext> Device for E1000<C> {
     }
 
     // Bar1 IO proxies access to bar0
-    fn region_access_bar1(
+    pub fn region_access_bar1(
         &mut self, offset: usize, data: &mut [u8], write: bool,
     ) -> std::result::Result<usize, i32> {
         const IO_REGISTER_SIZE: usize = 4;
@@ -146,10 +128,8 @@ impl<C: NicContext> Device for E1000<C> {
             }
         }
     }
-}
 
-impl<C: NicContext> E1000<C> {
-    fn reset_e1000(&mut self) {
+    pub fn reset_e1000(&mut self) {
         self.regs = Default::default();
         self.fallback_buffer = [0; 0x20000];
         self.regs
@@ -222,8 +202,9 @@ impl<C: NicContext> E1000<C> {
                 // Software wants to transmit packets
                 tx_ring.tail = self.regs.td_t.tail as usize;
 
+                let mut descriptor_buffer = [0u8; DESCRIPTOR_BUFFER_SIZE];
                 while !tx_ring.is_empty() {
-                    let mut changed_descriptor = tx_ring.read_head().unwrap();
+                    let mut changed_descriptor = tx_ring.read_head(&mut self.nic_ctx).unwrap();
                     if changed_descriptor.cmd_dext {
                         todo!("Only legacy TX descriptors are currently supported");
                     }
@@ -235,23 +216,23 @@ impl<C: NicContext> E1000<C> {
                     );
 
                     // Send packet/frame
-                    let mapping = tx_ring
-                        .get_descriptor_mapping(
-                            &mut self.ctx,
-                            changed_descriptor.buffer,
-                            tx_ring.head,
-                        )
-                        .unwrap();
+                    self.nic_ctx.dma_read(
+                        changed_descriptor.buffer as usize,
+                        descriptor_buffer.as_mut_slice(),
+                    );
+
                     let length = changed_descriptor.length as usize;
-                    let buffer = &mapping.dma(0)[..length];
-                    let sent = self.nic_ctx.as_ref().unwrap().send(buffer).unwrap();
+                    let buffer = &descriptor_buffer[..length];
+                    let sent = self.nic_ctx.send(buffer).unwrap();
                     assert_eq!(length, sent, "Did not send specified packet length");
                     eprintln!("E1000: Sent {} bytes!", sent);
 
                     // Done processing, report if requested
                     if changed_descriptor.cmd_rs {
                         changed_descriptor.status_dd = true;
-                        tx_ring.write_and_advance_head(changed_descriptor).unwrap();
+                        tx_ring
+                            .write_and_advance_head(changed_descriptor, &mut self.nic_ctx)
+                            .unwrap();
                     } else {
                         tx_ring.advance_head();
                     }
@@ -270,12 +251,9 @@ impl<C: NicContext> E1000<C> {
             .as_mut()
             .context("RX Ring not yet initialized")?;
 
-        let mut descriptor = rx_ring.read_head()?;
+        let mut descriptor = rx_ring.read_head(&mut self.nic_ctx)?;
 
-        let mapping =
-            rx_ring.get_descriptor_mapping(&mut self.ctx, descriptor.buffer, rx_ring.head)?;
-        let buffer = mapping.dma_mut(0);
-
+        let mut buffer = [0u8; DESCRIPTOR_BUFFER_SIZE];
         buffer[..received.len()].copy_from_slice(received);
 
         // With the linux kernel driver packets seem to be cut short 4 bytes, so increase length
@@ -283,7 +261,9 @@ impl<C: NicContext> E1000<C> {
         descriptor.status_eop = true;
         descriptor.status_dd = true;
 
-        rx_ring.write_and_advance_head(descriptor)?;
+        self.nic_ctx.dma_write(descriptor.buffer as usize, &buffer);
+
+        rx_ring.write_and_advance_head(descriptor, &mut self.nic_ctx)?;
         self.regs.rd_h.head = rx_ring.head as u16;
 
         // Workaround: Report rxt0 even though we don't emulate any timer
@@ -297,7 +277,7 @@ impl<C: NicContext> E1000<C> {
             "Triggering interrupt, set causes: {:?}",
             self.regs.interrupt_cause
         );
-        self.ctx.trigger_irq(0).unwrap();
+        self.nic_ctx.trigger_interrupt();
     }
 
     // Link Status Change

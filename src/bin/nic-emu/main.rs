@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+use std::rc::Rc;
+
 use anyhow::Result;
+use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
 use polling::{Event, PollMode, Poller};
 
@@ -7,13 +11,88 @@ use e1000_emu::{NicContext, E1000};
 
 pub mod net;
 
-struct E1000Context {
+// Adapt from NicContext to libvfio_user's DeviceContext
+struct LibvfioUserContext {
+    device_context: Rc<DeviceContext>,
+
+    // Cache dma mappings instead of releasing them after each op
+    dma_mappings: HashMap<usize, DmaMapping>,
+
     interface: Interface,
 }
 
-impl NicContext for E1000Context {
-    fn send(&self, buffer: &[u8]) -> Result<usize> {
+impl NicContext for LibvfioUserContext {
+    fn send(&mut self, buffer: &[u8]) -> Result<usize> {
         self.interface.send(buffer).map_err(anyhow::Error::msg)
+    }
+
+    fn dma_read(&mut self, address: usize, buffer: &mut [u8]) {
+        let mapping = self.dma_mappings.entry(address).or_insert_with(|| {
+            self.device_context
+                .dma_map(address, buffer.len(), 1, true, true)
+                .unwrap()
+        });
+
+        let dma_buffer = mapping.dma(0);
+        buffer.copy_from_slice(&dma_buffer[..buffer.len()]);
+    }
+
+    fn dma_write(&mut self, address: usize, buffer: &[u8]) {
+        let mapping = self.dma_mappings.entry(address).or_insert_with(|| {
+            self.device_context
+                .dma_map(address, buffer.len(), 1, true, true)
+                .unwrap()
+        });
+
+        let dma_buffer = mapping.dma_mut(0);
+        dma_buffer[..buffer.len()].copy_from_slice(buffer);
+    }
+
+    fn trigger_interrupt(&mut self) {
+        self.device_context.trigger_irq(0).unwrap()
+    }
+}
+
+// Device facing libvfio_user for callbacks, forwarding them to behavioral model
+struct E1000Device {
+    e1000: E1000<LibvfioUserContext>,
+}
+
+impl Device for E1000Device {
+    fn new(ctx: Rc<DeviceContext>) -> Self {
+        let nic_ctx = LibvfioUserContext {
+            device_context: ctx,
+            dma_mappings: Default::default(),
+            interface: Interface::initialize(true),
+        };
+
+        E1000Device {
+            e1000: E1000::new(nic_ctx),
+        }
+    }
+
+    fn log(&self, level: i32, msg: &str) {
+        if level <= 6 {
+            println!("libvfio-user log: {} - {}", level, msg);
+        }
+    }
+
+    fn reset(&mut self, reason: DeviceResetReason) -> Result<(), i32> {
+        println!("E1000: Resetting device, Reason: {:?}", reason);
+        self.e1000.reset_e1000();
+        Ok(())
+    }
+
+    fn region_access_bar0(
+        &mut self, offset: usize, data: &mut [u8], write: bool,
+    ) -> Result<usize, i32> {
+        self.e1000.region_access_bar0(offset, data, write)
+    }
+
+    fn region_access_bar1(
+        &mut self, offset: usize, data: &mut [u8], write: bool,
+    ) -> std::result::Result<usize, i32> {
+        self.e1000.region_access_bar1(offset, data, write)
     }
 }
 
@@ -60,26 +139,19 @@ fn main() {
         .build()
         .unwrap();
 
-    let mut e1000 = config.produce::<E1000<E1000Context>>().unwrap();
+    let mut e1000_device = config.produce::<E1000Device>().unwrap();
     println!("VFU context created successfully");
-
-    // Initialize interface
-    let interface = Interface::initialize(true);
-    let mut interface_buffer = [0u8; 4096]; // Big enough
-
-    // Provide e1000 with context
-    let nic_ctx = E1000Context { interface };
-    e1000.nic_ctx = Some(nic_ctx);
 
     // Setup initial eeprom, should not be changed afterwards
 
     // Set to test mac
     // x2-... is in locally administered range and should hopefully not conflict with anything
-    e1000
+    e1000_device
+        .e1000
         .eeprom
         .initial_eeprom
         .set_ethernet_address([0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
-    e1000.eeprom.pack_initial_eeprom();
+    e1000_device.e1000.eeprom.pack_initial_eeprom();
 
     // Use same poller and event list for both attach and run
     let poller = Poller::new().unwrap();
@@ -89,27 +161,25 @@ fn main() {
     const EVENT_KEY_RUN: usize = 1;
     const EVENT_KEY_RECEIVE: usize = 2;
 
+    let ctx = e1000_device.e1000.nic_ctx.device_context.clone();
+
     // 1. Wait for client to attach
 
     println!("Attaching...");
-    poller
-        .add(&e1000.ctx, Event::all(EVENT_KEY_ATTACH))
-        .unwrap();
+    poller.add(&ctx, Event::all(EVENT_KEY_ATTACH)).unwrap();
 
     loop {
         events.clear();
         poller.wait(&mut events, None).unwrap();
 
-        match e1000.ctx.attach().unwrap() {
+        match ctx.attach().unwrap() {
             Some(_) => {
                 break;
             }
             None => {
                 // Renew fd, not using Edge mode like we do below for run() since
                 // attach probably succeeds fine the first time
-                poller
-                    .modify(&e1000.ctx, Event::all(EVENT_KEY_ATTACH))
-                    .unwrap();
+                poller.modify(&ctx, Event::all(EVENT_KEY_ATTACH)).unwrap();
             }
         }
     }
@@ -121,15 +191,18 @@ fn main() {
     // Removed and now adding it again since file descriptor may change after attach
     // Poll in Edge mode to avoid having to set interest again and again
     poller
-        .add_with_mode(&e1000.ctx, Event::all(EVENT_KEY_RUN), PollMode::Edge)
+        .add_with_mode(&ctx, Event::all(EVENT_KEY_RUN), PollMode::Edge)
         .unwrap();
     poller
         .add_with_mode(
-            &e1000.nic_ctx.as_ref().unwrap().interface,
+            &e1000_device.e1000.nic_ctx.interface,
             Event::all(EVENT_KEY_RECEIVE),
             PollMode::Edge,
         )
         .unwrap();
+
+    // Buffer for received packets interface
+    let mut interface_buffer = [0u8; 4096]; // Big enough
 
     loop {
         events.clear();
@@ -138,20 +211,19 @@ fn main() {
         for event in &events {
             match event.key {
                 EVENT_KEY_RUN => {
-                    e1000.ctx().run().unwrap();
+                    ctx.run().unwrap();
                 }
                 EVENT_KEY_RECEIVE => loop {
-                    match e1000
+                    match e1000_device
+                        .e1000
                         .nic_ctx
-                        .as_ref()
-                        .unwrap()
                         .interface
                         .receive(&mut interface_buffer)
                         .unwrap()
                     {
                         Some(len) => {
                             println!("E1000: Received {} bytes!", len);
-                            match e1000.receive(&interface_buffer[..len]) {
+                            match e1000_device.e1000.receive(&interface_buffer[..len]) {
                                 Ok(_) => {}
                                 Err(err) => {
                                     println!("Error handling receive event, skipping ({})", err);
