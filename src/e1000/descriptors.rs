@@ -4,7 +4,8 @@ use anyhow::{ensure, Context, Result};
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
 
-use crate::{NicContext, E1000};
+use crate::e1000::E1000;
+use crate::NicContext;
 
 // Each descriptor is 16 bytes long, 8 for buffer address, rest for status, length, etc...
 const DESCRIPTOR_LENGTH: usize = 16;

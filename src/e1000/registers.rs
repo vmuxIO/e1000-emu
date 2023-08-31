@@ -6,8 +6,9 @@ use packed_struct::derive::PackedStruct;
 use packed_struct::prelude::{packed_bits, ReservedOne};
 use packed_struct::PackedStruct;
 
+use crate::e1000::E1000;
 use crate::util::match_and_access_registers;
-use crate::{NicContext, E1000};
+use crate::NicContext;
 
 #[derive(Default, Debug)]
 pub struct Registers {

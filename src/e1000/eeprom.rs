@@ -4,7 +4,8 @@ use anyhow::{anyhow, Result};
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
 
-use crate::{NicContext, E1000};
+use crate::e1000::E1000;
+use crate::NicContext;
 
 const MICROWIRE_OPCODE_READ: u8 = 0x6;
 // There is also write, erase, erase/write enable, erase/write disable opcodes

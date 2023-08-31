@@ -7,7 +7,8 @@ use libvfio_user::*;
 use polling::{Event, PollMode, Poller};
 
 use crate::net::Interface;
-use e1000_emu::{NicContext, E1000};
+use e1000_emu::e1000::E1000;
+use e1000_emu::NicContext;
 
 pub mod net;
 

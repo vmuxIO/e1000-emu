@@ -1,8 +1,9 @@
 use packed_struct::derive::PackedStruct;
 use packed_struct::{PackedStruct, PackedStructSlice};
 
+use crate::e1000::E1000;
 use crate::util::match_and_access_registers;
-use crate::{NicContext, E1000};
+use crate::NicContext;
 
 const MDI_READ: u8 = 0b10;
 const MDI_WRITE: u8 = 0b01;
