@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use packed_struct::PackedStruct;
 
 use crate::descriptors::*;
@@ -25,7 +25,6 @@ pub trait NicContext {
 pub struct E1000<C: NicContext> {
     pub nic_ctx: C,
     regs: Registers,
-    fallback_buffer: [u8; 0x20000],
     io_addr: u32,
     pub eeprom: EepromInterface,
     phy: Phy,
@@ -39,7 +38,6 @@ impl<C: NicContext> E1000<C> {
         E1000 {
             nic_ctx,
             regs: Default::default(),
-            fallback_buffer: [0; 0x20000],
             io_addr: 0,
             eeprom: Default::default(),
             phy: Default::default(),
@@ -50,44 +48,22 @@ impl<C: NicContext> E1000<C> {
 
     pub fn region_access_bar0(
         &mut self, offset: usize, data: &mut [u8], write: bool,
-    ) -> Result<usize, i32> {
+    ) -> Result<usize> {
         // Check size and offset
-        if data.len() != 4 {
-            if data.len() == 8 {
-                unimplemented!("Automatic chunking not yet implemented")
-            }
-            eprintln!(
-                "E1000: Warning: Out of spec region access size: {}, expected 4 or 8",
-                data.len()
-            );
-        }
-        if offset % 4 != 0 {
-            eprintln!(
-                "E1000: Warning: Out of spec region access offset: {}, expected multiple of 4",
-                offset
-            );
-        }
+        ensure!(data.len() == 4, "Bar0 accesses need to be 4 bytes in size");
+        ensure!(
+            offset % 4 == 0,
+            "Bar0 access offset needs to be at multiple of 4 bytes"
+        );
 
         match self.access_register(offset as u32, data, write) {
             Some(result) => result.unwrap(),
             None => {
-                print!("Unmatched register access, redirecting to fallback buffer. ");
-
-                let len = data.len();
-                if write {
-                    print!(
-                        "Writing {:x} bytes at {:x}: {:x?} ->",
-                        len,
-                        offset,
-                        &self.fallback_buffer[offset..offset + len]
-                    );
-
-                    self.fallback_buffer[offset..offset + len].copy_from_slice(data);
-                } else {
-                    print!("Reading {:x} bytes at {:x}:", len, offset);
-                    data.copy_from_slice(&self.fallback_buffer[offset..offset + len]);
-                }
-                println!(" {:x?}", data);
+                println!(
+                    "Unmatched register {} at {:x}",
+                    if write { "write" } else { "read" },
+                    offset
+                );
             }
         }
 
@@ -97,13 +73,12 @@ impl<C: NicContext> E1000<C> {
     // Bar1 IO proxies access to bar0
     pub fn region_access_bar1(
         &mut self, offset: usize, data: &mut [u8], write: bool,
-    ) -> std::result::Result<usize, i32> {
+    ) -> Result<usize> {
         const IO_REGISTER_SIZE: usize = 4;
-
-        if data.len() != IO_REGISTER_SIZE {
-            eprintln!("Unsupported bar1 access size {:x}", data.len());
-            return Err(22); //EINVAL
-        }
+        ensure!(
+            data.len() == IO_REGISTER_SIZE,
+            "Bar1 accesses need to be 4 bytes in size"
+        );
 
         match offset {
             0 => {
@@ -122,16 +97,12 @@ impl<C: NicContext> E1000<C> {
                 // IODATA: Access data at previously written IOADDR
                 self.region_access_bar0(self.io_addr as usize, data, write)
             }
-            x => {
-                eprintln!("Unsupported bar1 access at offset {:x}", x);
-                Err(22) //EINVAL
-            }
+            x => Err(anyhow!("Unsupported bar1 access at offset {:x}", x)),
         }
     }
 
     pub fn reset_e1000(&mut self) {
         self.regs = Default::default();
-        self.fallback_buffer = [0; 0x20000];
         self.regs
             .set_mac(self.eeprom.initial_eeprom.ethernet_address());
         self.phy = Default::default();

@@ -86,13 +86,23 @@ impl Device for E1000Device {
     fn region_access_bar0(
         &mut self, offset: usize, data: &mut [u8], write: bool,
     ) -> Result<usize, i32> {
-        self.e1000.region_access_bar0(offset, data, write)
+        self.e1000
+            .region_access_bar0(offset, data, write)
+            .or_else(|e| {
+                eprintln!("E1000: Error accessing Bar0: {}", e);
+                Err(22) // EINVAL
+            })
     }
 
     fn region_access_bar1(
         &mut self, offset: usize, data: &mut [u8], write: bool,
     ) -> std::result::Result<usize, i32> {
-        self.e1000.region_access_bar1(offset, data, write)
+        self.e1000
+            .region_access_bar1(offset, data, write)
+            .or_else(|e| {
+                eprintln!("E1000: Error accessing Bar1: {}", e);
+                Err(22) // EINVAL
+            })
     }
 }
 
