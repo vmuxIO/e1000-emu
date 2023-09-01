@@ -19,8 +19,8 @@ pub struct E1000<C: NicContext> {
     pub eeprom: EepromInterface,
     phy: Phy,
 
-    rx_ring: Option<DescriptorRing<ReceiveDescriptor>>,
-    tx_ring: Option<DescriptorRing<TransmitDescriptor>>,
+    rx_ring: Option<DescriptorRing>,
+    tx_ring: Option<DescriptorRing>,
 }
 
 impl<C: NicContext> E1000<C> {
@@ -165,38 +165,73 @@ impl<C: NicContext> E1000<C> {
 
                 let mut descriptor_buffer = [0u8; DESCRIPTOR_BUFFER_SIZE];
                 while !tx_ring.is_empty() {
-                    let mut changed_descriptor = tx_ring.read_head(&mut self.nic_ctx).unwrap();
-                    if changed_descriptor.cmd_dext {
-                        todo!("Only legacy TX descriptors are currently supported");
+                    let mut transmit_descriptor =
+                        TransmitDescriptor::read_descriptor(tx_ring, &mut self.nic_ctx).unwrap();
+
+                    if let Some(buffer) = transmit_descriptor.buffer() {
+                        // Null descriptors should only occur in *receive* descriptor padding
+                        assert_ne!(buffer, 0, "Transmit descriptor buffer is null");
                     }
 
-                    // Null descriptors should only occur in *receive* descriptor padding
-                    assert_ne!(
-                        changed_descriptor.buffer, 0,
-                        "Transmit descriptor buffer is null"
-                    );
+                    match &transmit_descriptor {
+                        TransmitDescriptor::Legacy(legacy_descriptor) => {
+                            // Send packet/frame
+                            self.nic_ctx.dma_read(
+                                legacy_descriptor.buffer as usize,
+                                descriptor_buffer.as_mut_slice(),
+                            );
 
-                    // Send packet/frame
-                    self.nic_ctx.dma_read(
-                        changed_descriptor.buffer as usize,
-                        descriptor_buffer.as_mut_slice(),
-                    );
+                            let length = legacy_descriptor.length as usize;
+                            let buffer = &descriptor_buffer[..length];
+                            let sent = self.nic_ctx.send(buffer).unwrap();
+                            assert_eq!(length, sent, "Did not send specified packet length");
+                            eprintln!("E1000: Sent {} bytes!", sent);
+                        }
+                        TransmitDescriptor::TcpContext(..) => {
+                            // Don't actually process anything, might be necessary in the future
+                        }
+                        TransmitDescriptor::TcpData(tcp_data_descriptor) => {
+                            // Process same way as legacy descriptor for now
 
-                    let length = changed_descriptor.length as usize;
-                    let buffer = &descriptor_buffer[..length];
-                    let sent = self.nic_ctx.send(buffer).unwrap();
-                    assert_eq!(length, sent, "Did not send specified packet length");
-                    eprintln!("E1000: Sent {} bytes!", sent);
+                            // Send packet/frame
+                            self.nic_ctx.dma_read(
+                                tcp_data_descriptor.buffer as usize,
+                                descriptor_buffer.as_mut_slice(),
+                            );
+
+                            let length = tcp_data_descriptor.length as usize;
+                            let buffer = &descriptor_buffer[..length];
+                            let sent = self.nic_ctx.send(buffer).unwrap();
+                            assert_eq!(length, sent, "Did not send specified packet length");
+                            eprintln!("E1000: Sent {} bytes!", sent);
+                        }
+                    }
 
                     // Done processing, report if requested
-                    if changed_descriptor.cmd_rs {
-                        changed_descriptor.status_dd = true;
-                        tx_ring
-                            .write_and_advance_head(changed_descriptor, &mut self.nic_ctx)
-                            .unwrap();
+                    if transmit_descriptor.report_status() {
+                        *transmit_descriptor.descriptor_done_mut() = true;
+
+                        match transmit_descriptor {
+                            TransmitDescriptor::Legacy(desc) => {
+                                tx_ring
+                                    .write_and_advance_head(desc, &mut self.nic_ctx)
+                                    .unwrap();
+                            }
+                            TransmitDescriptor::TcpContext(desc) => {
+                                tx_ring
+                                    .write_and_advance_head(desc, &mut self.nic_ctx)
+                                    .unwrap();
+                            }
+                            TransmitDescriptor::TcpData(desc) => {
+                                tx_ring
+                                    .write_and_advance_head(desc, &mut self.nic_ctx)
+                                    .unwrap();
+                            }
+                        }
                     } else {
                         tx_ring.advance_head();
                     }
+
                     self.regs.td_h.head = tx_ring.head as u16;
                 }
             }
@@ -212,7 +247,7 @@ impl<C: NicContext> E1000<C> {
             .as_mut()
             .context("RX Ring not yet initialized")?;
 
-        let mut descriptor = rx_ring.read_head(&mut self.nic_ctx)?;
+        let mut descriptor: ReceiveDescriptor = rx_ring.read_head(&mut self.nic_ctx)?;
 
         let mut buffer = [0u8; DESCRIPTOR_BUFFER_SIZE];
         buffer[..received.len()].copy_from_slice(received);
