@@ -20,3 +20,4 @@ packed_struct = "0.10.1"
 etherparse = "0.13.0"
 tun-tap = { version = "0.1.4", default-features = false, features = ["libc"] } # Exclude default tokio feature
 polling = "2.8.0"
+internet-checksum = "0.2.1"

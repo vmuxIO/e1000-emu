@@ -170,9 +170,15 @@ pub struct TransmitDescriptorLegacy {
     #[packed_field(bits = "64:79")]
     pub length: u16,
 
+    #[packed_field(bits = "80:87")]
+    pub cso: u8, // Checksum Offset
+
     // Command field offset 88 bits
     #[packed_field(bits = "88")]
     pub cmd_eop: bool, // End of packet
+
+    #[packed_field(bits = "90")]
+    pub cmd_ic: bool, // Insert Checksum
 
     #[packed_field(bits = "91")]
     pub cmd_rs: bool, // Report status, if set status_dd should be set after processing packet
@@ -180,22 +186,56 @@ pub struct TransmitDescriptorLegacy {
     // Status field offset 96 bits
     #[packed_field(bits = "96")]
     pub status_dd: bool, // Descriptor Done
+
+    #[packed_field(bits = "104:111")]
+    pub css: u8, // Checksum Start Field
 }
 
-// TCP/IP context transmit descriptor, does not contain any data
-#[derive(PackedStruct, Debug)]
+// TCP/IP context transmit descriptor, does not contain any data by itself,
+// always in front of one or multiple TCP/IP data transmit descriptors
+#[derive(PackedStruct, Debug, Clone)]
 #[packed_struct(bit_numbering = "lsb0", size_bytes = "16", endian = "msb")]
 pub struct TransmitDescriptorTcpContext {
+    #[packed_field(bits = "0:7")]
+    pub ip_css: u8, // IP Checksum Start
+
+    #[packed_field(bits = "8:15")]
+    pub ip_cso: u8, // IP Checksum Offset
+
+    #[packed_field(bits = "16:31")]
+    pub ip_cse: u16, // IP Checksum Ending
+
+    #[packed_field(bits = "32:39")]
+    pub tu_css: u8, // TCP/UDP Checksum Start
+
+    #[packed_field(bits = "40:47")]
+    pub tu_cso: u8, // TCP/UDP Checksum Offset
+
+    #[packed_field(bits = "48:63")]
+    pub tu_cse: u16, // TCP/UDP Checksum Ending
+
+    #[packed_field(bits = "64:83")]
+    pub paylen: u32, // Payload Length
+
     // Command field offset 88 bits
+    #[packed_field(bits = "90")]
+    pub tucmd_tse: bool, // TCP Segmentation Enable
+
     #[packed_field(bits = "91")]
     pub tucmd_rs: bool, // Report status, if set status_dd should be set after processing packet
 
     // Status field offset 96 bits
     #[packed_field(bits = "96")]
     pub status_dd: bool, // Descriptor Done
+
+    #[packed_field(bits = "104:111")]
+    pub hdrlen: u8, // Header Length
+
+    #[packed_field(bits = "112:127")]
+    pub mss: u16, // Maximum Segment Size
 }
 
-// TCP/IP data transmit descriptor, may be slightly different to legacy descriptor
+// TCP/IP data transmit descriptor
 #[derive(PackedStruct, Debug)]
 #[packed_struct(bit_numbering = "lsb0", size_bytes = "16", endian = "msb")]
 pub struct TransmitDescriptorTcpData {
@@ -215,8 +255,16 @@ pub struct TransmitDescriptorTcpData {
     // Status field offset 96 bits
     #[packed_field(bits = "96")]
     pub status_dd: bool, // Descriptor Done
+
+    // Packet Options field offset 104 bits
+    #[packed_field(bits = "104")]
+    pub popts_ixsm: bool, // Insert IP Checksum
+
+    #[packed_field(bits = "105")]
+    pub popts_txsm: bool, // Insert TCP/UDP Checksum
 }
 
+#[derive(Debug)]
 pub enum TransmitDescriptor {
     Legacy(TransmitDescriptorLegacy),
     TcpContext(TransmitDescriptorTcpContext),

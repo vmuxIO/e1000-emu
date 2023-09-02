@@ -11,6 +11,7 @@ mod descriptors;
 mod eeprom;
 mod phy;
 mod registers;
+mod transmit;
 
 pub struct E1000<C: NicContext> {
     pub nic_ctx: C,
@@ -155,87 +156,7 @@ impl<C: NicContext> E1000<C> {
     }
 
     fn tdt_write(&mut self) {
-        match &mut self.tx_ring {
-            None => {
-                // TDT was just initialized
-            }
-            Some(ref mut tx_ring) => {
-                // Software wants to transmit packets
-                tx_ring.tail = self.regs.td_t.tail as usize;
-
-                let mut descriptor_buffer = [0u8; DESCRIPTOR_BUFFER_SIZE];
-                while !tx_ring.is_empty() {
-                    let mut transmit_descriptor =
-                        TransmitDescriptor::read_descriptor(tx_ring, &mut self.nic_ctx).unwrap();
-
-                    if let Some(buffer) = transmit_descriptor.buffer() {
-                        // Null descriptors should only occur in *receive* descriptor padding
-                        assert_ne!(buffer, 0, "Transmit descriptor buffer is null");
-                    }
-
-                    match &transmit_descriptor {
-                        TransmitDescriptor::Legacy(legacy_descriptor) => {
-                            // Send packet/frame
-                            self.nic_ctx.dma_read(
-                                legacy_descriptor.buffer as usize,
-                                descriptor_buffer.as_mut_slice(),
-                            );
-
-                            let length = legacy_descriptor.length as usize;
-                            let buffer = &descriptor_buffer[..length];
-                            let sent = self.nic_ctx.send(buffer).unwrap();
-                            assert_eq!(length, sent, "Did not send specified packet length");
-                            eprintln!("E1000: Sent {} bytes!", sent);
-                        }
-                        TransmitDescriptor::TcpContext(..) => {
-                            // Don't actually process anything, might be necessary in the future
-                        }
-                        TransmitDescriptor::TcpData(tcp_data_descriptor) => {
-                            // Process same way as legacy descriptor for now
-
-                            // Send packet/frame
-                            self.nic_ctx.dma_read(
-                                tcp_data_descriptor.buffer as usize,
-                                descriptor_buffer.as_mut_slice(),
-                            );
-
-                            let length = tcp_data_descriptor.length as usize;
-                            let buffer = &descriptor_buffer[..length];
-                            let sent = self.nic_ctx.send(buffer).unwrap();
-                            assert_eq!(length, sent, "Did not send specified packet length");
-                            eprintln!("E1000: Sent {} bytes!", sent);
-                        }
-                    }
-
-                    // Done processing, report if requested
-                    if transmit_descriptor.report_status() {
-                        *transmit_descriptor.descriptor_done_mut() = true;
-
-                        match transmit_descriptor {
-                            TransmitDescriptor::Legacy(desc) => {
-                                tx_ring
-                                    .write_and_advance_head(desc, &mut self.nic_ctx)
-                                    .unwrap();
-                            }
-                            TransmitDescriptor::TcpContext(desc) => {
-                                tx_ring
-                                    .write_and_advance_head(desc, &mut self.nic_ctx)
-                                    .unwrap();
-                            }
-                            TransmitDescriptor::TcpData(desc) => {
-                                tx_ring
-                                    .write_and_advance_head(desc, &mut self.nic_ctx)
-                                    .unwrap();
-                            }
-                        }
-                    } else {
-                        tx_ring.advance_head();
-                    }
-
-                    self.regs.td_h.head = tx_ring.head as u16;
-                }
-            }
-        }
+        self.process_tx_ring();
     }
 
     // Place received frame inside rx-ring
