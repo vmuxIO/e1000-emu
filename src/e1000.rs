@@ -199,7 +199,31 @@ impl<C: NicContext> E1000<C> {
         self.nic_ctx.trigger_interrupt();
     }
 
-    // Link Status Change
+    /// Transmit Descriptor Written Back & Transmit Queue Empty
+    /// (With the latter always being the case after the former in this behavioral model)
+    fn report_txdw_and_txqe(&mut self) {
+        if self.regs.interrupt_mask.TXDW {
+            self.regs.interrupt_cause.TXDW = true;
+        }
+
+        if self.regs.interrupt_mask.TXQE {
+            self.regs.interrupt_cause.TXQE = true;
+        }
+
+        if self.regs.interrupt_mask.TXDW || self.regs.interrupt_mask.TXQE {
+            self.interrupt();
+        }
+    }
+
+    /// Transmit Queue Empty
+    fn report_txqe(&mut self) {
+        if self.regs.interrupt_mask.TXQE {
+            self.regs.interrupt_cause.TXQE = true;
+            self.interrupt();
+        }
+    }
+
+    /// Link Status Change
     fn report_lsc(&mut self) {
         if self.regs.interrupt_mask.LSC {
             self.regs.interrupt_cause.LSC = true;
@@ -207,7 +231,7 @@ impl<C: NicContext> E1000<C> {
         }
     }
 
-    // Link Status Change
+    /// Receiver Timer Interrupt
     fn report_rxt0(&mut self) {
         if self.regs.interrupt_mask.RXT0 {
             self.regs.interrupt_cause.RXT0 = true;
@@ -215,7 +239,7 @@ impl<C: NicContext> E1000<C> {
         }
     }
 
-    // MDI/O Access Complete
+    /// MDI/O Access Complete
     fn report_mdac(&mut self) {
         if self.regs.interrupt_mask.MDAC {
             self.regs.interrupt_cause.MDAC = true;

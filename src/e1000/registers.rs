@@ -216,10 +216,10 @@ pub struct InterruptCauses {
     #[packed_field(bits = "1")]
     pub TXQE: bool, // Transmit Queue Empty
 
-    #[packed_field(bits = "2")]
+    #[packed_field(bits = "2")] // Also manually triggered by linux kernel driver
     pub LSC: bool, // Link Status Change
 
-    #[packed_field(bits = "4")]
+    #[packed_field(bits = "4")] // Manually triggered by linux kernel driver
     pub RXDMT0: bool, // Receive Descriptor Minimum Threshold Reached
 
     #[packed_field(bits = "7")]

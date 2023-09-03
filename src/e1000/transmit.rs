@@ -125,9 +125,10 @@ impl<C: NicContext> E1000<C> {
             tx_ring.tail = self.regs.td_t.tail as usize;
 
             let mut sequence = TransmitDescriptorSequence::default();
+            let mut report_status = false;
             while !tx_ring.is_empty() {
                 let mut transmit_descriptor =
-                    TransmitDescriptor::read_descriptor(tx_ring, &mut self.nic_ctx).unwrap();
+                    TransmitDescriptor::read_descriptor(&tx_ring, &mut self.nic_ctx).unwrap();
 
                 //eprintln!("TX DESC: {:x?}", transmit_descriptor);
 
@@ -140,6 +141,7 @@ impl<C: NicContext> E1000<C> {
 
                 // Done processing, report if requested
                 if transmit_descriptor.report_status() {
+                    report_status = true;
                     *transmit_descriptor.descriptor_done_mut() = true;
 
                     match transmit_descriptor {
@@ -174,6 +176,12 @@ impl<C: NicContext> E1000<C> {
                 }
 
                 self.regs.td_h.head = tx_ring.head as u16;
+            }
+
+            if report_status {
+                self.report_txdw_and_txqe();
+            } else {
+                self.report_txqe()
             }
         }
     }
