@@ -291,14 +291,6 @@ impl TransmitDescriptor {
         }
     }
 
-    pub fn buffer(&self) -> Option<u64> {
-        match self {
-            TransmitDescriptor::Legacy(desc) => Some(desc.buffer),
-            TransmitDescriptor::TcpContext(..) => None,
-            TransmitDescriptor::TcpData(desc) => Some(desc.buffer),
-        }
-    }
-
     pub fn report_status(&self) -> bool {
         match self {
             TransmitDescriptor::Legacy(desc) => desc.cmd_rs,
