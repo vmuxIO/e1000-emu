@@ -22,6 +22,7 @@ impl DescriptorRing {
         &self, index: usize, nic_ctx: &mut dyn NicContext,
     ) -> Result<[u8; DESCRIPTOR_LENGTH]> {
         let mut ring_buffer = vec![0u8; self.length * DESCRIPTOR_LENGTH];
+        nic_ctx.dma_prepare(self.ring_address, ring_buffer.len());
         nic_ctx.dma_read(self.ring_address, ring_buffer.as_mut_slice());
 
         let buffer = ring_buffer
@@ -53,6 +54,7 @@ impl DescriptorRing {
         T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]>,
     {
         let mut ring_buffer = vec![0u8; self.length * DESCRIPTOR_LENGTH];
+        nic_ctx.dma_prepare(self.ring_address, ring_buffer.len());
         nic_ctx.dma_read(self.ring_address, ring_buffer.as_mut_slice());
 
         let buffer = ring_buffer
@@ -64,6 +66,7 @@ impl DescriptorRing {
         data.reverse(); // Reverse because of endianness
 
         buffer.copy_from_slice(data.as_slice());
+        // Dma range already prepared
         nic_ctx.dma_write(self.ring_address, ring_buffer.as_mut_slice());
         Ok(())
     }

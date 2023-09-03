@@ -26,10 +26,8 @@ impl TransmitDescriptorSequence {
         let old_len = self.data.len();
         self.data.resize(old_len + length, 0);
 
-        // TODO: Partial reads
-        let mut buffer = [0u8; DESCRIPTOR_BUFFER_SIZE];
-        nic_ctx.dma_read(address, &mut buffer);
-        self.data.as_mut_slice()[old_len..].copy_from_slice(&buffer[..length]);
+        nic_ctx.dma_prepare(address, DESCRIPTOR_BUFFER_SIZE);
+        nic_ctx.dma_read(address, &mut self.data.as_mut_slice()[old_len..]);
         Ok(())
     }
 

@@ -178,6 +178,8 @@ impl<C: NicContext> E1000<C> {
         descriptor.status_eop = true;
         descriptor.status_dd = true;
 
+        self.nic_ctx
+            .dma_prepare(descriptor.buffer as usize, buffer.len());
         self.nic_ctx.dma_write(descriptor.buffer as usize, &buffer);
 
         rx_ring.write_and_advance_head(descriptor, &mut self.nic_ctx)?;
