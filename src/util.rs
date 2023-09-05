@@ -51,3 +51,15 @@ pub fn _dummy_frame() -> Vec<u8> {
 
     frame
 }
+
+pub fn wrapping_add_to_u16_be_bytes(data: &mut [u8], by: u16) {
+    let mut n = [0u8; 2];
+    n.copy_from_slice(data);
+    data.copy_from_slice(&u16::from_be_bytes(n).wrapping_add(by).to_be_bytes());
+}
+
+pub fn wrapping_add_to_u32_be_bytes(data: &mut [u8], by: u32) {
+    let mut n = [0u8; 4];
+    n.copy_from_slice(data);
+    data.copy_from_slice(&u32::from_be_bytes(n).wrapping_add(by).to_be_bytes());
+}

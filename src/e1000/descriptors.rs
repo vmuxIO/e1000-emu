@@ -221,6 +221,12 @@ pub struct TransmitDescriptorTcpContext {
     pub paylen: u32, // Payload Length
 
     // Command field offset 88 bits
+    #[packed_field(bits = "88")]
+    pub tucmd_tcp: bool, // Packet Type, 0 -> UDP, 1 -> TCP
+
+    #[packed_field(bits = "89")]
+    pub tucmd_ip: bool, // Packet Type, 0 -> IPv6, 1 -> IPv4
+
     #[packed_field(bits = "90")]
     pub tucmd_tse: bool, // TCP Segmentation Enable
 
