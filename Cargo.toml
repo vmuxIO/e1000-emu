@@ -1,5 +1,5 @@
 [package]
-name = "e1000-emu"
+name = "nic-emu"
 version = "0.0.1"
 edition = "2021"
 license = "MIT"
