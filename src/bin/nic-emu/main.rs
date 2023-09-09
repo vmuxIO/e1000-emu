@@ -4,7 +4,7 @@ use std::rc::Rc;
 use anyhow::Result;
 use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
-use polling::{Event, PollMode, Poller};
+use polling::{Event, Events, PollMode, Poller};
 
 use crate::net::Interface;
 use nic_emu::e1000::E1000;
@@ -174,7 +174,7 @@ fn main() {
 
     // Use same poller and event list for both attach and run
     let poller = Poller::new().unwrap();
-    let mut events = vec![];
+    let mut events = Events::new();
 
     const EVENT_KEY_ATTACH: usize = 0;
     const EVENT_KEY_RUN: usize = 1;
@@ -185,7 +185,9 @@ fn main() {
     // 1. Wait for client to attach
 
     println!("Attaching...");
-    poller.add(&ctx, Event::all(EVENT_KEY_ATTACH)).unwrap();
+    unsafe {
+        poller.add(&ctx, Event::all(EVENT_KEY_ATTACH)).unwrap();
+    }
 
     loop {
         events.clear();
@@ -207,18 +209,20 @@ fn main() {
     // 2. Process client requests
 
     println!("Running...");
-    // Removed and now adding it again since file descriptor may change after attach
+    // Auto-removed and now adding ctx again since file descriptor may change after attach
     // Poll in Edge mode to avoid having to set interest again and again
-    poller
-        .add_with_mode(&ctx, Event::all(EVENT_KEY_RUN), PollMode::Edge)
-        .unwrap();
-    poller
-        .add_with_mode(
-            &e1000_device.e1000.nic_ctx.interface,
-            Event::all(EVENT_KEY_RECEIVE),
-            PollMode::Edge,
-        )
-        .unwrap();
+    unsafe {
+        poller
+            .add_with_mode(&ctx, Event::all(EVENT_KEY_RUN), PollMode::Edge)
+            .unwrap();
+        poller
+            .add_with_mode(
+                &e1000_device.e1000.nic_ctx.interface,
+                Event::all(EVENT_KEY_RECEIVE),
+                PollMode::Edge,
+            )
+            .unwrap();
+    }
 
     // Buffer for received packets interface
     let mut interface_buffer = [0u8; 4096]; // Big enough
@@ -227,7 +231,7 @@ fn main() {
         events.clear();
         poller.wait(&mut events, None).unwrap();
 
-        for event in &events {
+        for event in events.iter() {
             match event.key {
                 EVENT_KEY_RUN => {
                     ctx.run().unwrap();
