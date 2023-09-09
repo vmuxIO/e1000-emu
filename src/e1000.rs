@@ -1,4 +1,5 @@
 use anyhow::{anyhow, ensure, Context, Result};
+use log::{info, trace};
 use packed_struct::PackedStruct;
 
 use crate::e1000::descriptors::*;
@@ -50,7 +51,7 @@ impl<C: NicContext> E1000<C> {
         match self.access_register(offset as u32, data, write) {
             Some(result) => result.unwrap(),
             None => {
-                println!(
+                trace!(
                     "Unmatched register {} at {:x}",
                     if write { "write" } else { "read" },
                     offset
@@ -105,13 +106,13 @@ impl<C: NicContext> E1000<C> {
 
     fn ctrl_write(&mut self) {
         if self.regs.ctrl.RST {
-            println!("E1000: Reset by driver.");
+            info!("Reset by driver.");
             self.reset_e1000();
             return;
         }
 
         if self.regs.ctrl.SLU {
-            println!("E1000: Link up.");
+            info!("Link up.");
             self.regs.status.LU = true;
             self.phy.status.link_status = true;
             self.report_lsc();
@@ -192,7 +193,7 @@ impl<C: NicContext> E1000<C> {
     }
 
     fn interrupt(&mut self) {
-        println!(
+        trace!(
             "Triggering interrupt, set causes: {:?}",
             self.regs.interrupt_cause
         );

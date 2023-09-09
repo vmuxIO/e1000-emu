@@ -2,6 +2,7 @@ use std::io::ErrorKind;
 use std::os::fd::{AsRawFd, RawFd};
 use std::process::Command;
 
+use log::info;
 use tun_tap::{Iface, Mode};
 
 // Start name with "tap" to avoid systemd-networkd from managing it (if configured this way)
@@ -36,7 +37,7 @@ impl Interface {
             .wait()
             .unwrap();
 
-        println!("Interface \"{}\" setup!", interface.name());
+        info!("Interface \"{}\" setup!", interface.name());
 
         Interface { interface }
     }

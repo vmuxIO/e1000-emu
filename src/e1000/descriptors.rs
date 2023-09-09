@@ -1,4 +1,5 @@
 use anyhow::{anyhow, ensure, Context, Result};
+use log::debug;
 use packed_struct::derive::PackedStruct;
 use packed_struct::PackedStruct;
 
@@ -115,7 +116,7 @@ impl DescriptorRing {
 
 impl<C: NicContext> E1000<C> {
     pub fn setup_rx_ring(&mut self) {
-        println!("E1000: Initializing RX ring.");
+        debug!("Initializing RX ring.");
         self.rx_ring = Some(DescriptorRing {
             ring_address: self.regs.get_receive_descriptor_base_address() as usize,
             length: self.regs.rd_len.length as usize * 8,
@@ -125,7 +126,7 @@ impl<C: NicContext> E1000<C> {
     }
 
     pub fn setup_tx_ring(&mut self) {
-        println!("E1000: Initializing TX ring.");
+        debug!("Initializing TX ring.");
         self.tx_ring = Some(DescriptorRing {
             ring_address: self.regs.get_transmit_descriptor_base_address() as usize,
             length: self.regs.td_len.length as usize * 8,

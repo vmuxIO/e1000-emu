@@ -1,28 +1,18 @@
 // Macro to provide easier offset to register match syntax
 // and optional debugging including field names, since some registers share the same struct type
 macro_rules! match_and_access_registers {
-    ($offset:expr, $data:expr, $write:expr, $debug:expr,
+    ($offset:expr, $data:expr, $write:expr,
     { $( $reg_offset:pat $(if $guard:expr)? => $reg:expr $( => $do:block )? ),* $(,)? }
     else $catch:block ) => {
         match $offset {
             $(
                 $reg_offset $(if $guard)? => {
-                    if $debug {
-                        print!("Register Debug: ");
-                        if $write {
-                            print!("Writing {:x?} to {}: {:?} -> ", $data, stringify!($reg), $reg);
-                        } else {
-                            print!("Reading {}: {:?} -> ", stringify!($reg), $reg);
-                        }
-                    }
-
                     let result = $reg.access($data, $write);
-                    if $debug {
-                        if $write {
-                            println!("{:?}", $reg);
-                        } else {
-                            println!("{:x?}", $data);
-                        }
+
+                    if $write {
+                        log::trace!("Writing {:x?} to {} -> {:?}", $data, stringify!($reg), $reg);
+                    } else {
+                        log::trace!("Reading {}: {:?} -> {:x?}", stringify!($reg), $reg, $data);
                     }
 
                     $( $do )?

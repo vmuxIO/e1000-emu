@@ -1,5 +1,6 @@
 use anyhow::{ensure, Result};
 use internet_checksum::{update, Checksum};
+use log::{debug, error, trace};
 
 use crate::e1000::descriptors::*;
 use crate::e1000::E1000;
@@ -179,11 +180,11 @@ impl<C: NicContext> E1000<C> {
                 let mut transmit_descriptor =
                     TransmitDescriptor::read_descriptor(&tx_ring, &mut self.nic_ctx).unwrap();
 
-                //eprintln!("TX DESC: {:?}", transmit_descriptor);
+                trace!("Processing TX descriptor: {:?}", transmit_descriptor);
 
                 let result = sequence.add_descriptor(&transmit_descriptor, &mut self.nic_ctx);
                 if let Err(err) = result {
-                    eprintln!("E1000: Error processing transmit descriptors: {}", err);
+                    error!("Error processing transmit descriptors: {}", err);
                     tx_ring.advance_head();
                     continue;
                 }
@@ -220,7 +221,7 @@ impl<C: NicContext> E1000<C> {
                     for data in packets {
                         let sent = self.nic_ctx.send(&data).unwrap();
                         assert_eq!(sent, data.len(), "Did not send specified packet length");
-                        eprintln!("E1000: Sent {} bytes!", sent);
+                        debug!("Sent {} bytes!", sent);
                     }
 
                     sequence = TransmitDescriptorSequence::default();

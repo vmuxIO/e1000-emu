@@ -1,3 +1,4 @@
+use log::{error, trace};
 use packed_struct::derive::PackedStruct;
 use packed_struct::{PackedStruct, PackedStructSlice};
 
@@ -17,32 +18,25 @@ pub struct Phy {
 
 impl<C: NicContext> E1000<C> {
     pub fn mdic_write(&mut self) {
-        let debug = true;
-
         let offset = self.regs.mdic.register_address;
         let mut data = self.regs.mdic.data.to_be_bytes();
         let write = match self.regs.mdic.opcode {
             MDI_READ => false,
             MDI_WRITE => true,
             _ => {
-                eprintln!("Unknown MDIC opcode {:x}", self.regs.mdic.opcode);
+                error!("Unknown MDIC opcode {:x}", self.regs.mdic.opcode);
                 return;
             }
         };
 
-        // Add PHY prefix to debug prints to not confuse it with regular registers
-        if debug {
-            print!("PHY - ");
-        }
-
-        match_and_access_registers!(offset, data.as_mut_slice(), write, debug, {
+        match_and_access_registers!(offset, data.as_mut_slice(), write, {
             // Offset => Register ( => and also do )
             0x1 => self.phy.status,
             0x2 => self.phy.phy_identifier,
             0x3 => self.phy.phy_extended_identifier,
         } else {
             // Wildcard, if none of the above match
-            println!("Unknown register at {}, data={:?}, write={:?}", offset, data, write);
+            trace!("Unknown PHY register at {}, data={:?}, write={:?}", offset, data, write);
         });
 
         if !write {

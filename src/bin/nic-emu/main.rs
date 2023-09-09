@@ -4,6 +4,7 @@ use std::rc::Rc;
 use anyhow::Result;
 use libvfio_user::dma::DmaMapping;
 use libvfio_user::*;
+use log::{debug, error, info, log, warn, Level, LevelFilter};
 use polling::{Event, Events, PollMode, Poller};
 
 use crate::net::Interface;
@@ -81,13 +82,25 @@ impl Device for E1000Device {
     }
 
     fn log(&self, level: i32, msg: &str) {
-        if level <= 6 {
-            println!("libvfio-user log: {} - {}", level, msg);
-        }
+        log!(
+            // Match syslog levels
+            match level {
+                0 => panic!("libvfio-user panic: {}", msg),
+                1..=4 => Level::Error,
+                5 => Level::Warn,
+                6 => Level::Info,
+                7 => Level::Debug,
+                8.. => Level::Trace,
+                _ => unreachable!("Invalid syslog level {}", level),
+            },
+            "libvfio-user log ({}): {}",
+            level,
+            msg
+        )
     }
 
     fn reset(&mut self, reason: DeviceResetReason) -> Result<(), i32> {
-        println!("E1000: Resetting device, Reason: {:?}", reason);
+        info!("Resetting device, Reason: {:?}", reason);
         self.e1000.reset_e1000();
         Ok(())
     }
@@ -98,7 +111,7 @@ impl Device for E1000Device {
         self.e1000
             .region_access_bar0(offset, data, write)
             .or_else(|e| {
-                eprintln!("E1000: Error accessing Bar0: {}", e);
+                error!("Error accessing Bar0: {}", e);
                 Err(22) // EINVAL
             })
     }
@@ -109,13 +122,18 @@ impl Device for E1000Device {
         self.e1000
             .region_access_bar1(offset, data, write)
             .or_else(|e| {
-                eprintln!("E1000: Error accessing Bar1: {}", e);
+                error!("Error accessing Bar1: {}", e);
                 Err(22) // EINVAL
             })
     }
 }
 
 fn main() {
+    pretty_env_logger::formatted_builder()
+        .filter_level(LevelFilter::Info)
+        .parse_default_env() // Overwrite from RUST_LOG env var
+        .init();
+
     // Initialize E1000
     let socket = "/tmp/e1000-emu.sock";
 
@@ -159,7 +177,7 @@ fn main() {
         .unwrap();
 
     let mut e1000_device = config.produce::<E1000Device>().unwrap();
-    println!("VFU context created successfully");
+    debug!("VFU context created successfully");
 
     // Setup initial eeprom, should not be changed afterwards
 
@@ -184,7 +202,7 @@ fn main() {
 
     // 1. Wait for client to attach
 
-    println!("Attaching...");
+    info!("Attaching...");
     unsafe {
         poller.add(&ctx, Event::all(EVENT_KEY_ATTACH)).unwrap();
     }
@@ -208,7 +226,7 @@ fn main() {
 
     // 2. Process client requests
 
-    println!("Running...");
+    info!("Running...");
     // Auto-removed and now adding ctx again since file descriptor may change after attach
     // Poll in Edge mode to avoid having to set interest again and again
     unsafe {
@@ -245,11 +263,11 @@ fn main() {
                         .unwrap()
                     {
                         Some(len) => {
-                            println!("E1000: Received {} bytes!", len);
+                            debug!("Received {} bytes!", len);
                             match e1000_device.e1000.receive(&interface_buffer[..len]) {
                                 Ok(_) => {}
                                 Err(err) => {
-                                    println!("Error handling receive event, skipping ({})", err);
+                                    warn!("Error handling receive event, skipping ({})", err);
                                 }
                             }
                         }

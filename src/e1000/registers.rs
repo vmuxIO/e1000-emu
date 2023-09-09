@@ -2,6 +2,7 @@
 #![allow(non_snake_case)]
 
 use anyhow::Result;
+use log::trace;
 use packed_struct::derive::PackedStruct;
 use packed_struct::prelude::{packed_bits, ReservedOne};
 use packed_struct::PackedStruct;
@@ -76,34 +77,28 @@ impl Registers {
         let new_mask = if clear { mask & !update } else { mask | update };
         self.interrupt_mask = InterruptCauses::unpack(&new_mask.to_ne_bytes()).unwrap();
 
-        println!(
+        trace!(
             "Updated interrupt mask, with clear={}, now: {:?}",
-            clear, self.interrupt_mask
+            clear,
+            self.interrupt_mask
         );
     }
 }
 
 fn clear(register: &mut impl Default) {
     *register = Default::default();
-    println!("Cleared register.");
+    trace!("Cleared register.");
 }
 
 impl<C: NicContext> E1000<C> {
     pub fn access_register(
         &mut self, offset: u32, data: &mut [u8], write: bool,
     ) -> Option<Result<()>> {
-        let mut debug = true;
-
-        // Exclude registers which are accessed thousands of times from debug output
-        if offset == 0x8 || offset == 0x10 {
-            debug = false;
-        }
-
         // While we could alternatively match offsets to registers and call .access(data, write)
         // after the match, that would require an additional match just to invoke actions
         // e.g. for controlling registers and registers that clear after read
         // So instead do it in one go using custom macro
-        let result = match_and_access_registers!( offset, data, write, debug, {
+        let result = match_and_access_registers!( offset, data, write, {
             // Offset => Register ( => and also do )
             0x0 => self.regs.ctrl => { if write { self.ctrl_write() } },
             0x8 => self.regs.status,
