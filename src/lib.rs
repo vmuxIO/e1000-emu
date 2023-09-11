@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 pub mod e1000;
+mod ffi;
 mod util;
 
 pub trait NicContext {
