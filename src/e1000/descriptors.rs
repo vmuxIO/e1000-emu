@@ -72,6 +72,15 @@ impl DescriptorRing {
         Ok(())
     }
 
+    pub fn hardware_owned_descriptors(&self) -> usize {
+        let mut tail = self.tail;
+        if tail < self.head {
+            tail += self.length;
+        }
+
+        tail - self.head
+    }
+
     // Is the section owned by hardware empty?
     pub fn is_empty(&self) -> bool {
         self.head == self.tail

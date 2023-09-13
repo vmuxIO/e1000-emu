@@ -253,29 +253,13 @@ fn main() {
             match event.key {
                 EVENT_KEY_RUN => {
                     ctx.run().unwrap();
+
+                    // Try to catch up on deferred packets (arrived during throttling)
+                    receive_packets(&mut e1000_device.e1000, &mut interface_buffer)
                 }
-                EVENT_KEY_RECEIVE => loop {
-                    match e1000_device
-                        .e1000
-                        .nic_ctx
-                        .interface
-                        .receive(&mut interface_buffer)
-                        .unwrap()
-                    {
-                        Some(len) => {
-                            debug!("Received {} bytes!", len);
-                            match e1000_device.e1000.receive(&interface_buffer[..len]) {
-                                Ok(_) => {}
-                                Err(err) => {
-                                    warn!("Error handling receive event, skipping ({})", err);
-                                }
-                            }
-                        }
-                        None => {
-                            break;
-                        }
-                    }
-                },
+                EVENT_KEY_RECEIVE => {
+                    receive_packets(&mut e1000_device.e1000, &mut interface_buffer)
+                }
                 x => {
                     unreachable!("Unknown event key {}", x);
                 }
@@ -285,4 +269,34 @@ fn main() {
     // Fd would need to be removed if break is added in the future
     //poller.delete(&e1000.ctx).unwrap();
     //poller.delete(&e1000.interface).unwrap();
+}
+
+fn receive_packets(e1000: &mut E1000<LibvfioUserContext>, shared_buffer: &mut [u8; 4096]) {
+    loop {
+        if e1000.receive_state.should_defer() {
+            break;
+        }
+
+        match e1000.nic_ctx.interface.receive(shared_buffer).unwrap() {
+            Some(len) => {
+                if !e1000.receive_state.is_ready() {
+                    // Drop packet
+                    debug!(
+                        "Dropping {} incoming bytes, nic not ready to receive yet",
+                        len
+                    );
+                    continue;
+                }
+                match e1000.receive(&shared_buffer[..len]) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        warn!("Error handling receive event, skipping ({})", err);
+                    }
+                }
+            }
+            None => {
+                break;
+            }
+        }
+    }
 }

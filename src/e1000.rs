@@ -1,20 +1,24 @@
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, ensure, Result};
 use log::{info, trace};
 use packed_struct::PackedStruct;
 
 use crate::e1000::descriptors::*;
 use crate::e1000::eeprom::EepromInterface;
 use crate::e1000::phy::Phy;
+use crate::e1000::receive::ReceiveState;
 use crate::e1000::registers::Registers;
 use crate::NicContext;
 
 mod descriptors;
 mod eeprom;
 mod phy;
+mod receive;
 mod registers;
 mod transmit;
 
 pub struct E1000<C: NicContext> {
+    pub receive_state: ReceiveState,
+
     pub nic_ctx: C,
     regs: Registers,
     io_addr: u32,
@@ -28,6 +32,7 @@ pub struct E1000<C: NicContext> {
 impl<C: NicContext> E1000<C> {
     pub fn new(nic_ctx: C) -> Self {
         E1000 {
+            receive_state: ReceiveState::Offline,
             nic_ctx,
             regs: Default::default(),
             io_addr: 0,
@@ -94,6 +99,7 @@ impl<C: NicContext> E1000<C> {
     }
 
     pub fn reset_e1000(&mut self) {
+        self.receive_state = ReceiveState::Offline;
         self.regs = Default::default();
         self.regs
             .set_mac(self.eeprom.initial_eeprom.ethernet_address());
@@ -135,6 +141,7 @@ impl<C: NicContext> E1000<C> {
     fn rctl_write(&mut self) {
         if self.regs.rctl.EN && self.rx_ring.is_none() {
             self.setup_rx_ring();
+            self.update_rx_throttling();
         }
     }
 
@@ -145,51 +152,17 @@ impl<C: NicContext> E1000<C> {
     }
 
     fn rdt_write(&mut self) {
-        match &mut self.rx_ring {
-            None => {
-                // RDT was just initialized
-            }
-            Some(rx_ring) => {
-                // Software is done with the received packet(s)
-                rx_ring.tail = self.regs.rd_t.tail as usize;
-            }
+        if let Some(rx_ring) = &mut self.rx_ring {
+            // Software is done with the received packet(s)
+            rx_ring.tail = self.regs.rd_t.tail as usize;
+
+            self.update_rx_throttling();
         }
+        // Else RDT was just initialized
     }
 
     fn tdt_write(&mut self) {
         self.process_tx_ring();
-    }
-
-    // Place received frame inside rx-ring
-    pub fn receive(&mut self, received: &[u8]) -> Result<()> {
-        assert!(received.len() > 0, "receive called with no data");
-
-        let rx_ring = self
-            .rx_ring
-            .as_mut()
-            .context("RX Ring not yet initialized")?;
-
-        let mut descriptor: ReceiveDescriptor = rx_ring.read_head(&mut self.nic_ctx)?;
-
-        let mut buffer = [0u8; DESCRIPTOR_BUFFER_SIZE];
-        buffer[..received.len()].copy_from_slice(received);
-
-        // With the linux kernel driver packets seem to be cut short 4 bytes, so increase length
-        descriptor.length = received.len() as u16 + 4;
-        descriptor.status_eop = true;
-        descriptor.status_dd = true;
-
-        self.nic_ctx
-            .dma_prepare(descriptor.buffer as usize, buffer.len());
-        self.nic_ctx.dma_write(descriptor.buffer as usize, &buffer);
-
-        rx_ring.write_and_advance_head(descriptor, &mut self.nic_ctx)?;
-        self.regs.rd_h.head = rx_ring.head as u16;
-
-        // Workaround: Report rxt0 even though we don't emulate any timer
-        self.report_rxt0();
-
-        Ok(())
     }
 
     fn interrupt(&mut self) {
