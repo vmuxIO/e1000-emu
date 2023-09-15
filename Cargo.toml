@@ -8,7 +8,7 @@ license = "MIT"
 crate-type = ["lib", "staticlib"]
 
 [[bin]]
-name = "nic-emu"
+name = "nic-emu-cli"
 required-features = ["build-binary"]
 
 [features]
