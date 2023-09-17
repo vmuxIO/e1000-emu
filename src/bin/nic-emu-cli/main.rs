@@ -1,21 +1,66 @@
+use std::path::PathBuf;
+
+use clap::ArgAction;
+use clap::Parser;
+use ipnet::IpNet;
 use log::{debug, info, warn, LevelFilter};
+use macaddr::MacAddr6;
 use polling::{Event, Events, PollMode, Poller};
 
 use crate::ctx::LibvfioUserContext;
 use crate::e1000::E1000Device;
+use crate::net::Interface;
 use nic_emu::e1000::E1000;
 
 mod ctx;
 mod e1000;
 pub mod net;
 
+#[derive(Parser, Debug)]
+#[command(long_about = "")] // long_about required for long help, otherwise help is always short
+struct Args {
+    /// Libvfio-user socket
+    #[arg(short, long, default_value = "/tmp/nic-emu.sock")]
+    socket: PathBuf,
+
+    /// Name of tap interface, if not already existing it will be created,
+    /// %d will be replaced by a number to create new tap interface
+    // Start default name with "tap" to avoid systems from managing it, if configured this way
+    #[arg(short, long, default_value = "tap-nic-emu%d")]
+    tap: String,
+
+    /// Automatically run commands to add IP range to tap interface and set link to be up,
+    /// for example --net 10.1.0.1/24
+    #[arg(short, long)]
+    net: Option<IpNet>,
+
+    /// Ethernet address of the emulated nic inside guest
+    // Default mac x2-... is in locally administered range and
+    // should hopefully not conflict with anything
+    #[arg(short, long, default_value_t = MacAddr6::new(0x02, 0x34, 0x56, 0x78, 0x9A, 0xBC))]
+    mac: MacAddr6,
+
+    /// Increase verbosity, 1 time => Debug logs, multiple times => Trace logs
+    #[arg(short, long, action = ArgAction::Count)]
+    verbose: u8,
+}
+
 fn main() {
+    let args = Args::parse();
+
     pretty_env_logger::formatted_builder()
-        .filter_level(LevelFilter::Info)
+        .filter_level(match args.verbose {
+            0 => LevelFilter::Info,
+            1 => LevelFilter::Debug,
+            _ => LevelFilter::Trace,
+        })
         .parse_default_env() // Overwrite from RUST_LOG env var
         .init();
 
-    let mut e1000_device = E1000Device::build();
+    let mut e1000_device = E1000Device::build(args.socket, args.mac);
+
+    let interface = Interface::initialize(true, &args.tap, args.net);
+    e1000_device.e1000.nic_ctx.interface = Some(interface);
 
     // Use same poller and event list for both attach and run
     let poller = Poller::new().unwrap();
@@ -62,7 +107,7 @@ fn main() {
             .unwrap();
         poller
             .add_with_mode(
-                &e1000_device.e1000.nic_ctx.interface,
+                e1000_device.e1000.nic_ctx.interface.as_ref().unwrap(),
                 Event::all(EVENT_KEY_RECEIVE),
                 PollMode::Edge,
             )
@@ -104,7 +149,14 @@ fn receive_packets(e1000: &mut E1000<LibvfioUserContext>, shared_buffer: &mut [u
             break;
         }
 
-        match e1000.nic_ctx.interface.receive(shared_buffer).unwrap() {
+        match e1000
+            .nic_ctx
+            .interface
+            .as_ref()
+            .unwrap()
+            .receive(shared_buffer)
+            .unwrap()
+        {
             Some(len) => {
                 if !e1000.receive_state.is_ready() {
                     // Drop packet

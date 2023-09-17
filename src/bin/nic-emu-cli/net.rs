@@ -2,40 +2,41 @@ use std::io::ErrorKind;
 use std::os::fd::{AsRawFd, RawFd};
 use std::process::Command;
 
-use log::info;
+use ipnet::IpNet;
+use log::{debug, info, warn};
 use tun_tap::{Iface, Mode};
-
-// Start name with "tap" to avoid systemd-networkd from managing it (if configured this way)
-const INTERFACE_NAME: &str = "tapemu%d";
-// Route whole ip range to aid testing since host kernel automatically replies to
-// pings to 10.1.0.1 but will route 10.1.0.2 to tap interface
-const INTERFACE_IP: &str = "10.1.0.1/24";
 
 pub struct Interface {
     interface: Iface,
 }
 
 impl Interface {
-    pub fn initialize(non_blocking: bool) -> Self {
-        let interface = Iface::without_packet_info(INTERFACE_NAME, Mode::Tap).unwrap();
+    pub fn initialize(non_blocking: bool, tap_name: &str, net: Option<IpNet>) -> Self {
+        let interface = Iface::without_packet_info(tap_name, Mode::Tap).unwrap();
 
         if non_blocking {
             interface.set_non_blocking().unwrap();
         }
 
-        Command::new("ip")
-            .args(["address", "add", INTERFACE_IP, "dev", interface.name()])
-            .spawn()
-            .unwrap()
-            .wait()
-            .unwrap();
+        if let Some(ip_net) = net {
+            let ip_net = ip_net.to_string();
+            let mut cmd_ip_add = Command::new("ip");
+            cmd_ip_add.args(["address", "add", &ip_net, "dev", interface.name()]);
 
-        Command::new("ip")
-            .args(["link", "set", "up", interface.name()])
-            .spawn()
-            .unwrap()
-            .wait()
-            .unwrap();
+            let mut cmd_ip_up = Command::new("ip");
+            cmd_ip_up.args(["link", "set", "up", interface.name()]);
+
+            debug!("Running {:?}", cmd_ip_add);
+            cmd_ip_add.spawn().unwrap().wait().unwrap();
+
+            debug!("Running {:?}", cmd_ip_up);
+            cmd_ip_up.spawn().unwrap().wait().unwrap();
+        } else {
+            warn!(
+                "No automatic interface setup was specified (via --net), \
+                 make sure link is up before attaching"
+            )
+        }
 
         info!("Interface \"{}\" setup!", interface.name());
 

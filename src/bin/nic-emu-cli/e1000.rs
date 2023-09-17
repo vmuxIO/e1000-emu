@@ -1,11 +1,12 @@
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::Result;
 use libvfio_user::*;
 use log::{debug, error, info, log, Level};
+use macaddr::MacAddr6;
 
 use crate::ctx::LibvfioUserContext;
-use crate::net::Interface;
 use nic_emu::e1000::E1000;
 
 // Device facing libvfio_user for callbacks, forwarding them to behavioral model
@@ -15,7 +16,7 @@ pub struct E1000Device {
 
 impl Device for E1000Device {
     fn new(ctx: Rc<DeviceContext>) -> Self {
-        let nic_ctx = LibvfioUserContext::new(ctx, Interface::initialize(true));
+        let nic_ctx = LibvfioUserContext::new(ctx);
 
         E1000Device {
             e1000: E1000::new(nic_ctx),
@@ -70,11 +71,9 @@ impl Device for E1000Device {
 }
 
 impl E1000Device {
-    pub fn build() -> Box<Self> {
-        let socket = "/tmp/e1000-emu.sock";
-
+    pub fn build(path: PathBuf, mac: MacAddr6) -> Box<Self> {
         let config = DeviceConfigurator::default()
-            .socket_path(socket.parse().unwrap())
+            .socket_path(path)
             .overwrite_socket(true)
             .pci_type(PciType::Pci)
             .pci_config(PciConfig {
@@ -116,14 +115,11 @@ impl E1000Device {
         debug!("VFU context created successfully");
 
         // Setup initial eeprom, should not be changed afterwards
-
-        // Set to test mac
-        // x2-... is in locally administered range and should hopefully not conflict with anything
         e1000_device
             .e1000
             .eeprom
             .initial_eeprom
-            .set_ethernet_address([0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+            .set_ethernet_address(mac.into_array());
         e1000_device.e1000.eeprom.pack_initial_eeprom();
 
         e1000_device

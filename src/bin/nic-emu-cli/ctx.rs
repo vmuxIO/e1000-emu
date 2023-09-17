@@ -15,12 +15,16 @@ pub struct LibvfioUserContext {
     // Cache dma mappings instead of releasing them after each op
     dma_mappings: HashMap<usize, DmaMapping>,
 
-    pub interface: Interface,
+    pub interface: Option<Interface>, // will be set later
 }
 
 impl NicContext for LibvfioUserContext {
     fn send(&mut self, buffer: &[u8]) -> Result<usize> {
-        self.interface.send(buffer).map_err(anyhow::Error::msg)
+        self.interface
+            .as_ref()
+            .unwrap()
+            .send(buffer)
+            .map_err(anyhow::Error::msg)
     }
 
     fn dma_prepare(&mut self, address: usize, length: usize) {
@@ -59,11 +63,11 @@ impl NicContext for LibvfioUserContext {
 }
 
 impl LibvfioUserContext {
-    pub fn new(device_context: Rc<DeviceContext>, interface: Interface) -> Self {
+    pub fn new(device_context: Rc<DeviceContext>) -> Self {
         LibvfioUserContext {
             device_context,
             dma_mappings: Default::default(),
-            interface,
+            interface: None,
         }
     }
 }
