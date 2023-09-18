@@ -1,9 +1,27 @@
-use crate::e1000::E1000;
-use crate::NicContext;
-use log::error;
 use std::slice::from_raw_parts_mut;
 
+use log::{error, LevelFilter};
+
+use crate::e1000::E1000;
+use crate::NicContext;
+
 // General FFI interface
+
+/// Levels: 0=Off, 1=Error, 2=Warn, 3=Info, 4=Debug, 5..=Trace
+#[no_mangle]
+pub extern "C" fn initialize_rust_logging(max_level: u8) {
+    pretty_env_logger::formatted_builder()
+        .filter_level(match max_level {
+            0 => LevelFilter::Off,
+            1 => LevelFilter::Error,
+            2 => LevelFilter::Warn,
+            3 => LevelFilter::Info,
+            4 => LevelFilter::Debug,
+            _ => LevelFilter::Trace,
+        })
+        .parse_default_env() // Overwrite from RUST_LOG env var
+        .init();
+}
 
 type SendCallback = unsafe extern "C" fn(buffer: *const u8, len: usize);
 type DmaReadCallback = unsafe extern "C" fn(dma_address: usize, buffer: *mut u8, len: usize);
@@ -68,6 +86,7 @@ impl E1000FFI {
         }
     }
 
+    /// Access bar0 or bar1 region, returns true if successful
     #[no_mangle]
     pub extern "C" fn e1000_region_access(
         &mut self, bar: u8, offset: usize, data_ptr: *const u8, data_len: usize, write: bool,
@@ -94,5 +113,27 @@ impl E1000FFI {
     #[no_mangle]
     pub extern "C" fn e1000_reset(&mut self) {
         self.e1000.reset_e1000();
+    }
+
+    /// Process incoming data, returns true if successful
+    #[no_mangle]
+    pub extern "C" fn e1000_receive(&mut self, data_ptr: *const u8, data_len: usize) -> bool {
+        let data = unsafe { from_raw_parts_mut(data_ptr as *mut u8, data_len) };
+        if let Err(e) = self.e1000.receive(data) {
+            error!("Error receiving data: {}", e);
+            false
+        } else {
+            true
+        }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn e1000_rx_is_ready(&mut self) -> bool {
+        self.e1000.receive_state.is_ready()
+    }
+
+    #[no_mangle]
+    pub extern "C" fn e1000_rx_should_defer(&mut self) -> bool {
+        self.e1000.receive_state.should_defer()
     }
 }
