@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::slice::from_raw_parts_mut;
 
 use log::{error, LevelFilter};
@@ -23,13 +24,22 @@ pub extern "C" fn initialize_rust_logging(max_level: u8) {
         .init();
 }
 
-type SendCallback = unsafe extern "C" fn(buffer: *const u8, len: usize);
-type DmaReadCallback = unsafe extern "C" fn(dma_address: usize, buffer: *mut u8, len: usize);
-type DmaWriteCallback = unsafe extern "C" fn(dma_address: usize, buffer: *const u8, len: usize);
-type IssueInterruptCallback = unsafe extern "C" fn();
+type SendCallback = unsafe extern "C" fn(private_ptr: *mut c_void, buffer: *const u8, len: usize);
+type DmaReadCallback =
+    unsafe extern "C" fn(private_ptr: *mut c_void, dma_address: usize, buffer: *mut u8, len: usize);
+type DmaWriteCallback = unsafe extern "C" fn(
+    private_ptr: *mut c_void,
+    dma_address: usize,
+    buffer: *const u8,
+    len: usize,
+);
+type IssueInterruptCallback = unsafe extern "C" fn(private_ptr: *mut c_void);
 
 #[repr(C)]
 struct FfiCallbacks {
+    /// This pointer will be passed to callback functions, use it to reference your object
+    private_ptr: *mut c_void,
+
     send_cb: SendCallback,
     dma_read_cb: DmaReadCallback,
     dma_write_cb: DmaWriteCallback,
@@ -39,7 +49,7 @@ struct FfiCallbacks {
 impl NicContext for FfiCallbacks {
     fn send(&mut self, buffer: &[u8]) -> anyhow::Result<usize> {
         unsafe {
-            (self.send_cb)(buffer.as_ptr(), buffer.len());
+            (self.send_cb)(self.private_ptr, buffer.as_ptr(), buffer.len());
         }
 
         // Assume everything went well...
@@ -48,18 +58,18 @@ impl NicContext for FfiCallbacks {
 
     fn dma_read(&mut self, address: usize, buffer: &mut [u8]) {
         unsafe {
-            (self.dma_read_cb)(address, buffer.as_mut_ptr(), buffer.len());
+            (self.dma_read_cb)(self.private_ptr, address, buffer.as_mut_ptr(), buffer.len());
         }
     }
 
     fn dma_write(&mut self, address: usize, buffer: &[u8]) {
         unsafe {
-            (self.dma_write_cb)(address, buffer.as_ptr(), buffer.len());
+            (self.dma_write_cb)(self.private_ptr, address, buffer.as_ptr(), buffer.len());
         }
     }
 
     fn trigger_interrupt(&mut self) {
-        unsafe { (self.issue_interrupt_cb)() }
+        unsafe { (self.issue_interrupt_cb)(self.private_ptr) }
     }
 }
 
