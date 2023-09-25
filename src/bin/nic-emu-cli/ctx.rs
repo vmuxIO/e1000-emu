@@ -16,6 +16,13 @@ pub struct LibvfioUserContext {
     dma_mappings: HashMap<usize, DmaMapping>,
 
     pub interface: Option<Interface>, // will be set later
+
+    // Statistics
+    pub interrupt_count: u64,
+    pub dma_read_count: u64,
+    pub dma_read_bytes: u64,
+    pub dma_write_count: u64,
+    pub dma_write_bytes: u64,
 }
 
 impl NicContext for LibvfioUserContext {
@@ -44,6 +51,8 @@ impl NicContext for LibvfioUserContext {
 
         let dma_buffer = mapping.dma(0);
         buffer.copy_from_slice(&dma_buffer[..buffer.len()]);
+        self.dma_read_count += 1;
+        self.dma_read_bytes += buffer.len() as u64;
     }
 
     fn dma_write(&mut self, address: usize, buffer: &[u8]) {
@@ -55,10 +64,13 @@ impl NicContext for LibvfioUserContext {
 
         let dma_buffer = mapping.dma_mut(0);
         dma_buffer[..buffer.len()].copy_from_slice(buffer);
+        self.dma_write_count += 1;
+        self.dma_write_bytes += buffer.len() as u64;
     }
 
     fn trigger_interrupt(&mut self) {
-        self.device_context.trigger_irq(0).unwrap()
+        self.device_context.trigger_irq(0).unwrap();
+        self.interrupt_count += 1;
     }
 }
 
@@ -68,6 +80,11 @@ impl LibvfioUserContext {
             device_context,
             dma_mappings: Default::default(),
             interface: None,
+            interrupt_count: 0,
+            dma_read_count: 0,
+            dma_read_bytes: 0,
+            dma_write_count: 0,
+            dma_write_bytes: 0,
         }
     }
 }

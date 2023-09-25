@@ -1,9 +1,10 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use clap::ArgAction;
 use clap::Parser;
 use ipnet::IpNet;
-use log::{debug, info, warn, LevelFilter};
+use log::{debug, error, info, trace, warn, LevelFilter};
 use macaddr::MacAddr6;
 use polling::{Event, Events, PollMode, Poller};
 
@@ -117,19 +118,25 @@ fn main() {
     // Buffer for received packets interface
     let mut interface_buffer = [0u8; 4096]; // Big enough
 
-    loop {
+    let start = Instant::now();
+    'polling: loop {
         events.clear();
         poller.wait(&mut events, None).unwrap();
 
         for event in events.iter() {
             match event.key {
                 EVENT_KEY_RUN => {
-                    ctx.run().unwrap();
+                    trace!("Poller: Libvfio-user event");
+                    if let Err(e) = ctx.run() {
+                        error!("Error processing libvfio-user command: {}", e);
+                        break 'polling;
+                    }
 
                     // Try to catch up on deferred packets (arrived during throttling)
                     receive_packets(&mut e1000_device.e1000, &mut interface_buffer)
                 }
                 EVENT_KEY_RECEIVE => {
+                    trace!("Poller: Interface event");
                     receive_packets(&mut e1000_device.e1000, &mut interface_buffer)
                 }
                 x => {
@@ -138,9 +145,28 @@ fn main() {
             }
         }
     }
-    // Fd would need to be removed if break is added in the future
-    //poller.delete(&e1000.ctx).unwrap();
-    //poller.delete(&e1000.interface).unwrap();
+    // Just let poller be dropped, delete previous fds if we want to reuse it in the future
+
+    let elapsed = start.elapsed().as_secs_f32();
+    info!("Statistics:");
+    info!(
+        "{} total interrupts sent, ~{:.2} per second",
+        e1000_device.e1000.nic_ctx.interrupt_count,
+        e1000_device.e1000.nic_ctx.interrupt_count as f32 / elapsed
+    );
+    info!(
+        "{} total dma reads, ~{:.2} per second, {}B total",
+        e1000_device.e1000.nic_ctx.dma_read_count,
+        e1000_device.e1000.nic_ctx.dma_read_count as f32 / elapsed,
+        e1000_device.e1000.nic_ctx.dma_read_bytes
+    );
+    info!(
+        "{} total dma writes, ~{:.2} per second, {}B total",
+        e1000_device.e1000.nic_ctx.dma_write_count,
+        e1000_device.e1000.nic_ctx.dma_write_count as f32 / elapsed,
+        e1000_device.e1000.nic_ctx.dma_write_bytes
+    );
+    info!("Exiting after {:.3}s run time.", elapsed);
 }
 
 fn receive_packets(e1000: &mut E1000<LibvfioUserContext>, shared_buffer: &mut [u8; 4096]) {
