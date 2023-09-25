@@ -125,19 +125,6 @@ impl<C: NicContext> E1000<C> {
         }
     }
 
-    fn ics_write(&mut self) {
-        // Client can manually trigger interrupts through this register,
-        // Just have to check if they are masked off
-
-        // Check mask by checking if any bit is set, instead of comparing all fields
-        let cause = u32::from_ne_bytes(self.regs.interrupt_cause.pack().unwrap());
-        let mask = u32::from_ne_bytes(self.regs.interrupt_mask.pack().unwrap());
-
-        if cause & mask != 0 {
-            self.interrupt();
-        }
-    }
-
     fn rctl_write(&mut self) {
         if self.regs.rctl.EN && self.rx_ring.is_none() {
             self.setup_rx_ring();
@@ -166,6 +153,16 @@ impl<C: NicContext> E1000<C> {
     }
 
     fn interrupt(&mut self) {
+        // Interrupt cause register may always be set,
+        // but only generate PCI interrupt if at least one cause is not masked off
+
+        // Check mask by checking if any bit is set, instead of comparing all fields
+        let cause = u32::from_ne_bytes(self.regs.interrupt_cause.pack().unwrap());
+        let mask = u32::from_ne_bytes(self.regs.interrupt_mask.pack().unwrap());
+        if cause & mask == 0 {
+            return;
+        }
+
         trace!(
             "Triggering interrupt, set causes: {:?}",
             self.regs.interrupt_cause
@@ -176,48 +173,38 @@ impl<C: NicContext> E1000<C> {
     /// Transmit Descriptor Written Back & Transmit Queue Empty
     /// (With the latter always being the case after the former in this behavioral model)
     fn report_txdw_and_txqe(&mut self) {
-        if self.regs.interrupt_mask.TXDW {
-            self.regs.interrupt_cause.TXDW = true;
-        }
+        trace!("Reporting: Transmit Descriptor Written Back AND Transmit Queue Empty");
+        self.regs.interrupt_cause.TXDW = true;
+        self.regs.interrupt_cause.TXQE = true;
 
-        if self.regs.interrupt_mask.TXQE {
-            self.regs.interrupt_cause.TXQE = true;
-        }
-
-        if self.regs.interrupt_mask.TXDW || self.regs.interrupt_mask.TXQE {
-            self.interrupt();
-        }
+        self.interrupt();
     }
 
     /// Transmit Queue Empty
     fn report_txqe(&mut self) {
-        if self.regs.interrupt_mask.TXQE {
-            self.regs.interrupt_cause.TXQE = true;
-            self.interrupt();
-        }
+        trace!("Reporting: Transmit Queue Empty");
+        self.regs.interrupt_cause.TXQE = true;
+        self.interrupt();
     }
 
     /// Link Status Change
     fn report_lsc(&mut self) {
-        if self.regs.interrupt_mask.LSC {
-            self.regs.interrupt_cause.LSC = true;
-            self.interrupt();
-        }
+        trace!("Reporting: Link Status Change");
+        self.regs.interrupt_cause.LSC = true;
+        self.interrupt();
     }
 
     /// Receiver Timer Interrupt
     fn report_rxt0(&mut self) {
-        if self.regs.interrupt_mask.RXT0 {
-            self.regs.interrupt_cause.RXT0 = true;
-            self.interrupt();
-        }
+        trace!("Reporting: Receiver Timer Interrupt");
+        self.regs.interrupt_cause.RXT0 = true;
+        self.interrupt();
     }
 
     /// MDI/O Access Complete
     fn report_mdac(&mut self) {
-        if self.regs.interrupt_mask.MDAC {
-            self.regs.interrupt_cause.MDAC = true;
-            self.interrupt();
-        }
+        trace!("Reporting: MDI/O Access Complete");
+        self.regs.interrupt_cause.MDAC = true;
+        self.interrupt();
     }
 }

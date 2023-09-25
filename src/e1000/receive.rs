@@ -30,6 +30,7 @@ impl ReceiveState {
 impl<C: NicContext> E1000<C> {
     // Place received frame inside rx-ring
     pub fn receive(&mut self, received: &[u8]) -> Result<()> {
+        debug!("Receiving {} bytes", received.len());
         assert!(received.len() > 0, "receive called with no data");
         assert!(
             self.receive_state.is_ready(),
@@ -46,7 +47,9 @@ impl<C: NicContext> E1000<C> {
         let mut buffer = [0u8; DESCRIPTOR_BUFFER_SIZE];
         buffer[..received.len()].copy_from_slice(received);
 
-        // With the linux kernel driver packets seem to be cut short 4 bytes, so increase length
+        // Packets are cut short by 4 bytes because a Frame Check Sequence (FCS) is expected
+        // to be present at end and already checked by nic,
+        // but because we receive just the frame, assume it's ok and increase length to compensate
         descriptor.length = received.len() as u16 + 4;
         descriptor.status_eop = true;
         descriptor.status_dd = true;
@@ -55,10 +58,10 @@ impl<C: NicContext> E1000<C> {
             .dma_prepare(descriptor.buffer as usize, buffer.len());
         self.nic_ctx.dma_write(descriptor.buffer as usize, &buffer);
 
+        trace!("Put RX descriptor: {:?}", descriptor);
         rx_ring.write_and_advance_head(descriptor, &mut self.nic_ctx)?;
         self.regs.rd_h.head = rx_ring.head as u16;
 
-        debug!("Received {} bytes!", received.len());
         self.update_rx_throttling();
 
         // Workaround: Report rxt0 even though we don't emulate any timer
@@ -74,7 +77,7 @@ impl<C: NicContext> E1000<C> {
             let currently_throttled = self.receive_state == ReceiveState::Throttled;
             let should_throttle = hw_descriptors <= RX_QUEUE_RESERVE;
 
-            trace!("RX Ring: {} descriptors remaining", hw_descriptors);
+            trace!("RX Ring: {} free descriptors remaining", hw_descriptors);
 
             if !currently_throttled && should_throttle {
                 self.receive_state = ReceiveState::Throttled;

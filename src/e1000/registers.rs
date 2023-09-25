@@ -26,7 +26,10 @@ pub struct Registers {
     // Interrupts
     pub interrupt_cause: InterruptCauses,
     pub interrupt_mask: InterruptCauses,
-    interrupt_mask_set: InterruptCauses, // Required because of indirect mask writes via IMS, IMC
+    // Temporary register required for mask and causes updates, since writes to them are indirect
+    // IMS and IMC do not directly set mask but instead just set what bits to enable/disable
+    // ICS (and probably ICR) writes do as well for causes to avoid races
+    interrupt_temp: InterruptCauses,
 
     // Receive and Transmit Control
     pub rctl: ReceiveControl,
@@ -68,21 +71,6 @@ impl Registers {
         let high = (self.td_ba_h.base_address_high as u64) << 32;
         low | high
     }
-
-    // IMS and IMC do not directly set mask but instead just set what bits to enable/disable
-    fn update_interrupt_mask(&mut self, clear: bool) {
-        let mask = u32::from_ne_bytes(self.interrupt_mask.pack().unwrap());
-        let update = u32::from_ne_bytes(self.interrupt_mask_set.pack().unwrap());
-
-        let new_mask = if clear { mask & !update } else { mask | update };
-        self.interrupt_mask = InterruptCauses::unpack(&new_mask.to_ne_bytes()).unwrap();
-
-        trace!(
-            "Updated interrupt mask, with clear={}, now: {:?}",
-            clear,
-            self.interrupt_mask
-        );
-    }
 }
 
 fn clear(register: &mut impl Default) {
@@ -109,15 +97,40 @@ impl<C: NicContext> E1000<C> {
             // Management Data Interface Control, for reading/writing PHY
             0x20 => self.regs.mdic => { if write { self.mdic_write() } },
 
-            // ICR for reading and clearing interrupts, no writes
-            0xC0 => self.regs.interrupt_cause => { clear(&mut self.regs.interrupt_cause) },
-            // ICS for writing (and triggering interrupts), no reads
-            0xC8 => self.regs.interrupt_cause => { self.ics_write() },
-            // IMS for reading interrupt mask (read) and for enabling interrupts (write)
-            0xD0 if !write => self.regs.interrupt_mask,
-            0xD0 => self.regs.interrupt_mask_set => { self.regs.update_interrupt_mask(false) },
-            // IMC for disabling interrupts (only write)
-            0xD8 => self.regs.interrupt_mask_set => { self.regs.update_interrupt_mask(true) },
+            // ICR (0xC0) reads: clear-on-read, writes: out of spec but will clear specific causes
+            // ICS (0xC8) writes: manually trigger interrupts, reads: out of spec but
+            // real e1000 still allows ICS reads, which some drivers use to read without clear
+            0xC0 if !write => self.regs.interrupt_cause => { clear(&mut self.regs.interrupt_cause); },
+            0xC8 if !write => self.regs.interrupt_cause,
+            0xC0 | 0xC8 => self.regs.interrupt_temp => {
+                // Add causes for ICS, remove causes if ICR
+                let clear = offset == 0xC0;
+                self.regs.interrupt_cause.modify(&self.regs.interrupt_temp, clear);
+
+                trace!(
+                    "Updated interrupt cause, with clear={}, now: {:?}",
+                    clear,
+                    self.regs.interrupt_cause
+                );
+                if write {
+                    self.interrupt();
+                }
+            },
+
+            // IMS (0xD0) for reading interrupt mask (read) and for enabling interrupts (write)
+            // IMC (0xD8) for disabling interrupts (only write)
+            0xD0 | 0xD8 if !write => self.regs.interrupt_mask,
+            0xD0 | 0xD8 => self.regs.interrupt_temp => {
+                // Add causes for IMS, remove causes if IMC
+                let clear = offset == 0xD8;
+                self.regs.interrupt_mask.modify(&self.regs.interrupt_temp, clear);
+
+                trace!(
+                    "Updated interrupt mask, with clear={}, now: {:?}",
+                    clear,
+                    self.regs.interrupt_mask
+                );
+            },
 
             // Receive and Transmit Control
             0x100 => self.regs.rctl => { if write { self.rctl_write() } },
@@ -223,6 +236,20 @@ pub struct InterruptCauses {
     #[packed_field(bits = "9")]
     pub MDAC: bool, // MDI/O Access Complete
 } // Omitted a lot more causes, which are not yet emulated
+
+impl InterruptCauses {
+    fn modify(&mut self, mask: &InterruptCauses, clear: bool) {
+        let previous_bits = u32::from_ne_bytes(self.pack().unwrap());
+        let mask_bits = u32::from_ne_bytes(mask.pack().unwrap());
+
+        let new_bits = if clear {
+            previous_bits & !mask_bits
+        } else {
+            previous_bits | mask_bits
+        };
+        *self = InterruptCauses::unpack(&new_bits.to_ne_bytes()).unwrap();
+    }
+}
 
 // Rx and Tx
 #[derive(PackedStruct, Clone, Default, Debug)]
