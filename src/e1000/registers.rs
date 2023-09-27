@@ -215,8 +215,18 @@ pub struct Control {
 #[derive(PackedStruct, Clone, Default, Debug)]
 #[packed_struct(bit_numbering = "lsb0", size_bytes = "4")]
 pub struct Status {
+    // Always indicate Full duplex
+    #[packed_field(bits = "0")]
+    pub FD: ReservedOne<packed_bits::Bits<1>>, // 0: Half duplex, 1: Full duplex
+
     #[packed_field(bits = "1")]
     pub LU: bool, // Link up
+
+    // Always indicate 1000Mbit/s speed
+    #[packed_field(bits = "6")]
+    pub speed1: ReservedOne<packed_bits::Bits<1>>,
+    #[packed_field(bits = "7")]
+    pub speed2: ReservedOne<packed_bits::Bits<1>>,
 }
 
 // Interrupt register layouts, shared by ICR, ICS, IMS, IMC
