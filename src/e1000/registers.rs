@@ -1,6 +1,8 @@
 // Allow naming fields by their official all upper case abbreviations
 #![allow(non_snake_case)]
 
+use std::time::Duration;
+
 use anyhow::Result;
 use log::trace;
 use packed_struct::derive::PackedStruct;
@@ -24,6 +26,7 @@ pub struct Registers {
     pub mdic: MdiControl,
 
     // Interrupts
+    pub interrupt_throttling: InterruptDelay,
     pub interrupt_cause: InterruptCauses,
     pub interrupt_mask: InterruptCauses,
     // Temporary register required for mask and causes updates, since writes to them are indirect
@@ -96,6 +99,8 @@ impl<C: NicContext> E1000<C> {
 
             // Management Data Interface Control, for reading/writing PHY
             0x20 => self.regs.mdic => { if write { self.mdic_write() } },
+
+            0xC4 => self.regs.interrupt_throttling,
 
             // ICR (0xC0) reads: clear-on-read, writes: out of spec but will clear specific causes
             // ICS (0xC8) writes: manually trigger interrupts, reads: out of spec but
@@ -248,6 +253,24 @@ impl InterruptCauses {
             previous_bits | mask_bits
         };
         *self = InterruptCauses::unpack(&new_bits.to_ne_bytes()).unwrap();
+    }
+}
+
+#[derive(PackedStruct, Clone, Default, Debug)]
+#[packed_struct(bit_numbering = "lsb0", size_bytes = "4", endian = "msb")]
+pub struct InterruptDelay {
+    #[packed_field(bits = "0:15")]
+    pub interval: u16, // Interval in 256ns increments for ITR, 1024ns for other regs
+}
+
+impl InterruptDelay {
+    /// Function only for ITR! Other interrupt delay registers use different time increments!
+    pub(crate) fn get_itr_interval(&self) -> Option<Duration> {
+        if self.interval == 0 {
+            None
+        } else {
+            Some(Duration::new(0, self.interval as u32 * 256)) // 256ns increments
+        }
     }
 }
 

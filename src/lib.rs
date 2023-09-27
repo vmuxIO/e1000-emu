@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 
 pub mod e1000;
@@ -15,4 +17,9 @@ pub trait NicContext {
     fn dma_write(&mut self, address: usize, buffer: &[u8]);
 
     fn trigger_interrupt(&mut self);
+
+    /// Set or adjust the one-shot timer
+    fn set_timer(&mut self, duration: Duration);
+    /// Delete timer, timer might not have been set before
+    fn delete_timer(&mut self);
 }

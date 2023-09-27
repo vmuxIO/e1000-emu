@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 use anyhow::Result;
 use libvfio_user::dma::DmaMapping;
@@ -14,6 +15,9 @@ pub struct LibvfioUserContext {
 
     // Cache dma mappings instead of releasing them after each op
     dma_mappings: HashMap<usize, DmaMapping>,
+
+    // Keep track of requested timer and update real timer in main
+    pub timer: Option<Duration>,
 
     pub interface: Option<Interface>, // will be set later
 
@@ -72,6 +76,14 @@ impl NicContext for LibvfioUserContext {
         self.device_context.trigger_irq(0).unwrap();
         self.interrupt_count += 1;
     }
+
+    fn set_timer(&mut self, duration: Duration) {
+        self.timer = Some(duration);
+    }
+
+    fn delete_timer(&mut self) {
+        self.timer = None;
+    }
 }
 
 impl LibvfioUserContext {
@@ -79,6 +91,7 @@ impl LibvfioUserContext {
         LibvfioUserContext {
             device_context,
             dma_mappings: Default::default(),
+            timer: None,
             interface: None,
             interrupt_count: 0,
             dma_read_count: 0,

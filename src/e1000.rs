@@ -1,9 +1,9 @@
 use anyhow::{anyhow, ensure, Result};
 use log::{info, trace};
-use packed_struct::PackedStruct;
 
 use crate::e1000::descriptors::*;
 use crate::e1000::eeprom::EepromInterface;
+use crate::e1000::interrupts::InterruptMitigation;
 use crate::e1000::phy::Phy;
 use crate::e1000::receive::ReceiveState;
 use crate::e1000::registers::Registers;
@@ -11,6 +11,7 @@ use crate::NicContext;
 
 mod descriptors;
 mod eeprom;
+mod interrupts;
 mod phy;
 mod receive;
 mod registers;
@@ -27,6 +28,7 @@ pub struct E1000<C: NicContext> {
 
     rx_ring: Option<DescriptorRing>,
     tx_ring: Option<DescriptorRing>,
+    interrupt_mitigation: Option<InterruptMitigation>,
 }
 
 impl<C: NicContext> E1000<C> {
@@ -40,6 +42,7 @@ impl<C: NicContext> E1000<C> {
             phy: Default::default(),
             rx_ring: None,
             tx_ring: None,
+            interrupt_mitigation: Default::default(),
         }
     }
 
@@ -108,6 +111,10 @@ impl<C: NicContext> E1000<C> {
         // Remove previous rx, tx rings and the buffers they pointed at
         self.rx_ring = None;
         self.tx_ring = None;
+
+        // Reset interrupt mitigation
+        self.nic_ctx.delete_timer();
+        self.interrupt_mitigation = None;
     }
 
     fn ctrl_write(&mut self) {
@@ -150,61 +157,5 @@ impl<C: NicContext> E1000<C> {
 
     fn tdt_write(&mut self) {
         self.process_tx_ring();
-    }
-
-    fn interrupt(&mut self) {
-        // Interrupt cause register may always be set,
-        // but only generate PCI interrupt if at least one cause is not masked off
-
-        // Check mask by checking if any bit is set, instead of comparing all fields
-        let cause = u32::from_ne_bytes(self.regs.interrupt_cause.pack().unwrap());
-        let mask = u32::from_ne_bytes(self.regs.interrupt_mask.pack().unwrap());
-        if cause & mask == 0 {
-            return;
-        }
-
-        trace!(
-            "Triggering interrupt, set causes: {:?}",
-            self.regs.interrupt_cause
-        );
-        self.nic_ctx.trigger_interrupt();
-    }
-
-    /// Transmit Descriptor Written Back & Transmit Queue Empty
-    /// (With the latter always being the case after the former in this behavioral model)
-    fn report_txdw_and_txqe(&mut self) {
-        trace!("Reporting: Transmit Descriptor Written Back AND Transmit Queue Empty");
-        self.regs.interrupt_cause.TXDW = true;
-        self.regs.interrupt_cause.TXQE = true;
-
-        self.interrupt();
-    }
-
-    /// Transmit Queue Empty
-    fn report_txqe(&mut self) {
-        trace!("Reporting: Transmit Queue Empty");
-        self.regs.interrupt_cause.TXQE = true;
-        self.interrupt();
-    }
-
-    /// Link Status Change
-    fn report_lsc(&mut self) {
-        trace!("Reporting: Link Status Change");
-        self.regs.interrupt_cause.LSC = true;
-        self.interrupt();
-    }
-
-    /// Receiver Timer Interrupt
-    fn report_rxt0(&mut self) {
-        trace!("Reporting: Receiver Timer Interrupt");
-        self.regs.interrupt_cause.RXT0 = true;
-        self.interrupt();
-    }
-
-    /// MDI/O Access Complete
-    fn report_mdac(&mut self) {
-        trace!("Reporting: MDI/O Access Complete");
-        self.regs.interrupt_cause.MDAC = true;
-        self.interrupt();
     }
 }

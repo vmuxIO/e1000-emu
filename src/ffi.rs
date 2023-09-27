@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 use std::slice::from_raw_parts_mut;
+use std::time::Duration;
 
 use log::{error, LevelFilter};
 
@@ -70,6 +71,14 @@ impl NicContext for FfiCallbacks {
 
     fn trigger_interrupt(&mut self) {
         unsafe { (self.issue_interrupt_cb)(self.private_ptr) }
+    }
+
+    fn set_timer(&mut self, _duration: Duration) {
+        todo!()
+    }
+
+    fn delete_timer(&mut self) {
+        // TODO
     }
 }
 

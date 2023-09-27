@@ -7,6 +7,7 @@ use ipnet::IpNet;
 use log::{debug, error, info, trace, warn, LevelFilter};
 use macaddr::MacAddr6;
 use polling::{Event, Events, PollMode, Poller};
+use timerfd::{ClockId, SetTimeFlags, TimerFd, TimerState};
 
 use crate::ctx::LibvfioUserContext;
 use crate::e1000::E1000Device;
@@ -70,6 +71,7 @@ fn main() {
     const EVENT_KEY_ATTACH: usize = 0;
     const EVENT_KEY_RUN: usize = 1;
     const EVENT_KEY_RECEIVE: usize = 2;
+    const EVENT_KEY_TIMER: usize = 3;
 
     let ctx = e1000_device.e1000.nic_ctx.device_context.clone();
 
@@ -100,9 +102,13 @@ fn main() {
     // 2. Process client requests
 
     info!("Running...");
-    // Auto-removed and now adding ctx again since file descriptor may change after attach
-    // Poll in Edge mode to avoid having to set interest again and again
+
+    // Timer used for interrupt mitigation
+    let mut tfd = TimerFd::new_custom(ClockId::Monotonic, true, false).unwrap();
+
     unsafe {
+        // Auto-removed and now adding ctx again since file descriptor may change after attach
+        // Poll in Edge mode to avoid having to set interest again and again
         poller
             .add_with_mode(&ctx, Event::all(EVENT_KEY_RUN), PollMode::Edge)
             .unwrap();
@@ -113,10 +119,16 @@ fn main() {
                 PollMode::Edge,
             )
             .unwrap();
+        poller
+            .add_with_mode(&tfd, Event::all(EVENT_KEY_TIMER), PollMode::Edge)
+            .unwrap();
     }
 
     // Buffer for received packets interface
     let mut interface_buffer = [0u8; 4096]; // Big enough
+
+    // Previous timer duration to check if it has changed
+    let mut previous_timer_delay = None;
 
     let start = Instant::now();
     'polling: loop {
@@ -133,11 +145,32 @@ fn main() {
                     }
 
                     // Try to catch up on deferred packets (arrived during throttling)
-                    receive_packets(&mut e1000_device.e1000, &mut interface_buffer)
+                    receive_packets(&mut e1000_device.e1000, &mut interface_buffer);
+
+                    // Update timer
+                    if previous_timer_delay == e1000_device.e1000.nic_ctx.timer {
+                        continue;
+                    }
+
+                    if let Some(new_duration) = e1000_device.e1000.nic_ctx.timer {
+                        tfd.set_state(TimerState::Oneshot(new_duration), SetTimeFlags::Default);
+                    } else {
+                        tfd.set_state(TimerState::Disarmed, SetTimeFlags::Default);
+                    }
+                    previous_timer_delay = e1000_device.e1000.nic_ctx.timer;
+                    // TODO: Ignore timer events this polling iteration
                 }
                 EVENT_KEY_RECEIVE => {
                     trace!("Poller: Interface event");
                     receive_packets(&mut e1000_device.e1000, &mut interface_buffer)
+                }
+                EVENT_KEY_TIMER => {
+                    trace!("Poller: Timer event");
+                    e1000_device.e1000.timer_elapsed();
+
+                    // Reset timer detection
+                    previous_timer_delay = None;
+                    e1000_device.e1000.nic_ctx.timer = None;
                 }
                 x => {
                     unreachable!("Unknown event key {}", x);
