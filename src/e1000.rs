@@ -18,24 +18,33 @@ mod registers;
 mod transmit;
 
 pub struct E1000<C: NicContext> {
+    // Configuration
+    pub nic_ctx: C,
+    enable_interrupt_mitigation: bool,
+
+    // Status
     pub receive_state: ReceiveState,
 
-    pub nic_ctx: C,
+    // E1000 internals
     regs: Registers,
     io_addr: u32,
     pub eeprom: EepromInterface,
     phy: Phy,
 
+    // Nic-emu internals
     rx_ring: Option<DescriptorRing>,
     tx_ring: Option<DescriptorRing>,
     interrupt_mitigation: Option<InterruptMitigation>,
 }
 
 impl<C: NicContext> E1000<C> {
-    pub fn new(nic_ctx: C) -> Self {
+    /// Create a new E1000 instance, if mitigate_interrupts is true
+    /// the provided nic_ctx must have a one-shot timer implementation calling e1000.timer_elapsed()
+    pub fn new(nic_ctx: C, mitigate_interrupts: bool) -> Self {
         E1000 {
-            receive_state: ReceiveState::Offline,
             nic_ctx,
+            enable_interrupt_mitigation: mitigate_interrupts,
+            receive_state: ReceiveState::Offline,
             regs: Default::default(),
             io_addr: 0,
             eeprom: Default::default(),

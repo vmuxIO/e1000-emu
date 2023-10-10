@@ -19,7 +19,7 @@ impl Device for E1000Device {
         let nic_ctx = LibvfioUserContext::new(ctx);
 
         E1000Device {
-            e1000: E1000::new(nic_ctx),
+            e1000: E1000::new(nic_ctx, true),
         }
     }
 

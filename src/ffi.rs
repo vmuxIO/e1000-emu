@@ -92,7 +92,8 @@ impl E1000FFI {
     #[no_mangle]
     pub extern "C" fn new_e1000(callbacks: FfiCallbacks) -> *mut E1000FFI {
         let e1000_ffi = E1000FFI {
-            e1000: E1000::new(callbacks),
+            // Disable interrupt mitigation for now until timer callbacks have been added
+            e1000: E1000::new(callbacks, false),
         };
         Box::into_raw(Box::new(e1000_ffi))
     }

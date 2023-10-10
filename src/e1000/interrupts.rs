@@ -25,6 +25,10 @@ impl InterruptMitigation {
 impl<C: NicContext> E1000<C> {
     pub fn timer_elapsed(&mut self) {
         trace!("Timer elapsed");
+        if !self.enable_interrupt_mitigation {
+            warn!("Timer elapsed called, but interrupt mitigation is disabled");
+        }
+
         if let Some(mitigation) = &self.interrupt_mitigation {
             if !mitigation.interrupt_after {
                 warn!("Timer elapsed called, but timer was not supposed to be scheduled");
@@ -92,8 +96,10 @@ impl<C: NicContext> E1000<C> {
 
         // Re-arm interrupt throttling timer (if enabled)
         // This should not lead to an infinite loop, as this doesn't set timer yet
-        if let Some(duration) = self.regs.interrupt_throttling.get_itr_interval() {
-            self.mitigate_interrupts(duration);
+        if self.enable_interrupt_mitigation {
+            if let Some(duration) = self.regs.interrupt_throttling.get_itr_interval() {
+                self.mitigate_interrupts(duration);
+            }
         }
     }
 
