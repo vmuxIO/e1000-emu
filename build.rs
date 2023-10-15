@@ -15,7 +15,6 @@ fn main() {
             .with_crate(crate_dir)
             .with_pragma_once(true)
             .with_include_version(true)
-            .exclude_item("DESCRIPTOR_BUFFER_SIZE")
             .generate()
             .expect("Unable to generate bindings")
             .write_to_file(bindings_path);

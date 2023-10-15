@@ -9,7 +9,6 @@ use crate::NicContext;
 
 // Each descriptor is 16 bytes long, 8 for buffer address, rest for status, length, etc...
 const DESCRIPTOR_LENGTH: usize = 16;
-pub const DESCRIPTOR_BUFFER_SIZE: usize = 1920; // Default size linux kernel driver uses
 
 #[derive(Debug)]
 pub struct DescriptorRing {

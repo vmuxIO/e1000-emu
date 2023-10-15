@@ -290,6 +290,32 @@ impl InterruptDelay {
 pub struct ReceiveControl {
     #[packed_field(bits = "1")]
     pub EN: bool, // Receiver Enable
+
+    #[packed_field(bits = "16:17")]
+    BSIZE: u8, // Receive Buffer Size
+
+    #[packed_field(bits = "25")]
+    BSEX: bool, // Buffer Size Extension
+
+    #[packed_field(bits = "26")]
+    pub SECRC: bool, // Strip Ethernet CRC from incoming packet
+}
+
+impl ReceiveControl {
+    pub fn get_buffer_size(&self) -> usize {
+        let mut size = match self.BSIZE {
+            0b00 => 2048,
+            0b01 => 1024,
+            0b10 => 512,
+            0b11 => 256,
+            _ => unreachable!("Invalid RCTL BSIZE"),
+        };
+        if self.BSEX {
+            // BSEX is normally only supported for BSIZE values != 00, but support it anyway
+            size *= 16;
+        }
+        size
+    }
 }
 
 #[derive(PackedStruct, Clone, Default, Debug)]

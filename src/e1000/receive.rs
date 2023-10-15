@@ -44,19 +44,34 @@ impl<C: NicContext> E1000<C> {
 
         let mut descriptor: ReceiveDescriptor = rx_ring.read_head(&mut self.nic_ctx)?;
 
-        let mut buffer = [0u8; DESCRIPTOR_BUFFER_SIZE];
-        buffer[..received.len()].copy_from_slice(received);
-
-        // Packets are cut short by 4 bytes because a Frame Check Sequence (FCS) is expected
-        // to be present at end and already checked by nic,
+        // Unless SECRC (Strip Ethernet CRC) is set,
+        // a Frame Check Sequence (FCS) is expected to be present at end and already checked by nic,
         // but because we receive just the frame, assume it's ok and increase length to compensate
-        descriptor.length = received.len() as u16 + 4;
+        // otherwise packets would just be cut short by 4 bytes
+        let mut received_length = received.len();
+        if !self.regs.rctl.SECRC {
+            received_length += 4;
+        }
+
+        descriptor.length = received_length as u16;
         descriptor.status_eop = true;
         descriptor.status_dd = true;
 
-        self.nic_ctx
-            .dma_prepare(descriptor.buffer as usize, buffer.len());
-        self.nic_ctx.dma_write(descriptor.buffer as usize, &buffer, 0);
+        let buffer_size = self.regs.rctl.get_buffer_size();
+        if received_length > buffer_size {
+            todo!(
+                "Multiple RX descriptors per packet not yet supported, buffer size={}B, packet={}B",
+                buffer_size,
+                received_length,
+            );
+        }
+
+        let address = descriptor.buffer as usize;
+        if address == 0 {
+            todo!("RX Descriptor null padding not yet supported");
+        }
+        self.nic_ctx.dma_prepare(address, buffer_size);
+        self.nic_ctx.dma_write(address, &received, 0);
 
         trace!("Put RX descriptor: {:?}", descriptor);
         rx_ring.write_and_advance_head(descriptor, &mut self.nic_ctx)?;
