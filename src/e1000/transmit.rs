@@ -1,4 +1,4 @@
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use internet_checksum::{update, Checksum};
 use log::{debug, error, trace};
 
@@ -20,9 +20,9 @@ const TCP_FLAGS_MASK: u8 = 9; // FIN + PSH flag
 struct TransmitDescriptorSequence {
     data: Vec<u8>,
     done: bool,
+    tcp: bool,
 
     // Options only for tcp transmit descriptors
-    tcp_context: Option<TransmitDescriptorTcpContext>,
     insert_ip_checksum: bool,
     insert_tcp_checksum: bool,
 }
@@ -31,13 +31,15 @@ impl TransmitDescriptorSequence {
     fn read_to_buffer(
         &mut self, address: usize, length: usize, nic_ctx: &mut dyn NicContext,
     ) -> Result<()> {
-        // Null descriptors should only occur in *receive* descriptor padding
-        ensure!(address != 0, "Transmit descriptor buffer address is null");
+        // Null descriptors transfer no data
+        if address == 0 {
+            return Ok(());
+        }
 
         let old_len = self.data.len();
         self.data.resize(old_len + length, 0);
 
-        nic_ctx.dma_prepare(address, 4096); // Map whole page
+        nic_ctx.dma_prepare(address, length);
         nic_ctx.dma_read(address, &mut self.data.as_mut_slice()[old_len..], 0);
         Ok(())
     }
@@ -49,10 +51,7 @@ impl TransmitDescriptorSequence {
 
         match descriptor {
             TransmitDescriptor::Legacy(descriptor) => {
-                ensure!(
-                    self.tcp_context.is_none(),
-                    "Legacy transmit descriptor in tcp sequence"
-                );
+                ensure!(!self.tcp, "Legacy transmit descriptor in tcp sequence");
 
                 if descriptor.cmd_ic {
                     todo!("Inserting checksum in legacy descriptor not implemented yet");
@@ -67,25 +66,27 @@ impl TransmitDescriptorSequence {
 
                 self.done = descriptor.cmd_eop;
             }
-            TransmitDescriptor::TcpContext(descriptor) => {
+            TransmitDescriptor::TcpContext(..) => {
                 ensure!(
-                    self.tcp_context.is_none(),
-                    "Second tcp context transmit descriptor in sequence"
+                    self.data.is_empty(),
+                    "Tcp context transmit descriptor occurred in the middle of a packet"
                 );
-
-                self.tcp_context = Some(descriptor.clone());
+                // Context is saved outside of sequence as the context can be used multiple times
             }
             TransmitDescriptor::TcpData(descriptor) => {
-                ensure!(
-                    self.tcp_context.is_some(),
-                    "Tcp data transmit descriptor without context in sequence"
-                );
+                // self.tcp is always false for first iteration
+                if !self.tcp {
+                    ensure!(
+                        self.data.is_empty(),
+                        "Tcp data transmit descriptor in legacy descriptor sequence"
+                    );
 
-                // Only insert checksum options in first descriptor are valid
-                // (even though kernel driver seems to repeat them)
-                if self.data.is_empty() {
+                    // Insert checksum options are only valid in first tcp descriptor
+                    // (even though linux kernel driver seems to repeat them anyway)
                     self.insert_ip_checksum = descriptor.popts_ixsm;
                     self.insert_tcp_checksum = descriptor.popts_txsm;
+
+                    self.tcp = true;
                 }
 
                 self.read_to_buffer(
@@ -101,12 +102,17 @@ impl TransmitDescriptorSequence {
         Ok(())
     }
 
-    fn finalize(self) -> Result<Vec<Vec<u8>>> {
+    // Finalize consumes self, to ensure flags are reset in next sequence
+    // Could be done in place instead if this is a bottleneck
+    fn finalize(self, tcp_context: Option<&TransmitDescriptorTcpContext>) -> Result<Vec<Vec<u8>>> {
         assert!(self.done);
 
         let mut packets: Vec<Vec<u8>> = Vec::new();
 
-        if let Some(tcp_context) = self.tcp_context {
+        if self.tcp {
+            let tcp_context =
+                tcp_context.context("TCP sequence requires TCP context descriptor")?;
+
             // TCP Segmentation
             if tcp_context.tucmd_tse {
                 let header_length = tcp_context.hdrlen as usize;
@@ -194,7 +200,7 @@ impl<C: NicContext> E1000<C> {
                     report_status = true;
                     *transmit_descriptor.descriptor_done_mut() = true;
 
-                    match transmit_descriptor {
+                    match &transmit_descriptor {
                         TransmitDescriptor::Legacy(desc) => {
                             tx_ring
                                 .write_and_advance_head(desc, &mut self.nic_ctx)
@@ -215,8 +221,14 @@ impl<C: NicContext> E1000<C> {
                     tx_ring.advance_head();
                 }
 
+                if let TransmitDescriptor::TcpContext(desc) = transmit_descriptor {
+                    self.transmit_tcp_context = Some(desc);
+                }
+
                 if sequence.done {
-                    let packets = sequence.finalize().unwrap();
+                    let packets = sequence
+                        .finalize(self.transmit_tcp_context.as_ref())
+                        .unwrap();
 
                     for data in packets {
                         let sent = self.nic_ctx.send(&data).unwrap();
@@ -226,14 +238,13 @@ impl<C: NicContext> E1000<C> {
 
                     sequence = TransmitDescriptorSequence::default();
                 }
-
-                self.regs.td_h.head = tx_ring.head as u16;
             }
 
+            self.regs.td_h.head = tx_ring.head as u16;
             if report_status {
                 self.report_txdw_and_txqe();
             } else {
-                self.report_txqe()
+                self.report_txqe();
             }
         }
     }

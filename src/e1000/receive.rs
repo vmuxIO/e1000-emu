@@ -74,7 +74,7 @@ impl<C: NicContext> E1000<C> {
         self.nic_ctx.dma_write(address, &received, 0);
 
         trace!("Put RX descriptor: {:?}", descriptor);
-        rx_ring.write_and_advance_head(descriptor, &mut self.nic_ctx)?;
+        rx_ring.write_and_advance_head(&descriptor, &mut self.nic_ctx)?;
         self.regs.rd_h.head = rx_ring.head as u16;
 
         self.update_rx_throttling();

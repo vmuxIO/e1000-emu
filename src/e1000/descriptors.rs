@@ -46,7 +46,7 @@ impl DescriptorRing {
     }
 
     fn write_descriptor<T>(
-        &mut self, desc: T, index: usize, nic_ctx: &mut dyn NicContext,
+        &mut self, desc: &T, index: usize, nic_ctx: &mut dyn NicContext,
     ) -> Result<()>
     where
         T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]>,
@@ -96,7 +96,9 @@ impl DescriptorRing {
         self.read_descriptor(self.head, nic_ctx)
     }
 
-    pub fn write_and_advance_head<T>(&mut self, desc: T, nic_ctx: &mut dyn NicContext) -> Result<()>
+    pub fn write_and_advance_head<T>(
+        &mut self, desc: &T, nic_ctx: &mut dyn NicContext,
+    ) -> Result<()>
     where
         T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]>,
     {
@@ -205,7 +207,7 @@ pub struct TransmitDescriptorLegacy {
 
 // TCP/IP context transmit descriptor, does not contain any data by itself,
 // always in front of one or multiple TCP/IP data transmit descriptors
-#[derive(PackedStruct, Debug, Clone)]
+#[derive(PackedStruct, Debug)]
 #[packed_struct(bit_numbering = "lsb0", size_bytes = "16", endian = "msb")]
 pub struct TransmitDescriptorTcpContext {
     #[packed_field(bits = "0:7")]

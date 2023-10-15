@@ -34,6 +34,7 @@ pub struct E1000<C: NicContext> {
     // Nic-emu internals
     rx_ring: Option<DescriptorRing>,
     tx_ring: Option<DescriptorRing>,
+    transmit_tcp_context: Option<TransmitDescriptorTcpContext>,
     interrupt_mitigation: Option<InterruptMitigation>,
 }
 
@@ -51,6 +52,7 @@ impl<C: NicContext> E1000<C> {
             phy: Default::default(),
             rx_ring: None,
             tx_ring: None,
+            transmit_tcp_context: None,
             interrupt_mitigation: Default::default(),
         }
     }
@@ -117,9 +119,10 @@ impl<C: NicContext> E1000<C> {
             .set_mac(self.eeprom.initial_eeprom.ethernet_address());
         self.phy = Default::default();
 
-        // Remove previous rx, tx rings and the buffers they pointed at
+        // Reset previous rx, tx values
         self.rx_ring = None;
         self.tx_ring = None;
+        self.transmit_tcp_context = None;
 
         // Reset interrupt mitigation
         self.nic_ctx.delete_timer();
