@@ -1,6 +1,7 @@
 use anyhow::{anyhow, ensure, Context, Result};
 use log::debug;
 use packed_struct::derive::PackedStruct;
+use packed_struct::prelude::*;
 use packed_struct::PackedStruct;
 
 use crate::e1000::E1000;
@@ -160,6 +161,9 @@ pub struct ReceiveDescriptor {
 
     #[packed_field(bits = "97")]
     pub status_eop: bool, // End of packet
+
+    #[packed_field(bits = "98")]
+    status_ixsm: ReservedOne<packed_bits::Bits<1>>, // Ignore checksum indication, always on
 }
 
 // Base transmit descriptor for differentiating between the different transmit descriptor types
@@ -194,7 +198,13 @@ pub struct TransmitDescriptorLegacy {
     pub cmd_ic: bool, // Insert Checksum
 
     #[packed_field(bits = "91")]
-    pub cmd_rs: bool, // Report status, if set status_dd should be set after processing packet
+    cmd_rs: bool, // Report Status, if set status_dd should be set after processing packet
+
+    #[packed_field(bits = "92")]
+    cmd_rps: bool, // Report Packet Sent, but treat just like Report Status
+
+    #[packed_field(bits = "93")]
+    cmd_dext: ReservedZero<packed_bits::Bits<1>>, // Descriptor extension, 0 in this type
 
     // Status field offset 96 bits
     #[packed_field(bits = "96")]
@@ -202,6 +212,9 @@ pub struct TransmitDescriptorLegacy {
 
     #[packed_field(bits = "104:111")]
     pub css: u8, // Checksum Start Field
+
+    #[packed_field(bits = "112:127")]
+    special: u16, // Unused but keep to not delete it when writing back descriptor
 }
 
 // TCP/IP context transmit descriptor, does not contain any data by itself,
@@ -230,6 +243,9 @@ pub struct TransmitDescriptorTcpContext {
     #[packed_field(bits = "64:83")]
     pub paylen: u32, // Payload Length
 
+    #[packed_field(bits = "84")]
+    dtyp: ReservedZeroes<packed_bits::Bits<4>>, // Descriptor type, 0000b in this type
+
     // Command field offset 88 bits
     #[packed_field(bits = "88")]
     pub tucmd_tcp: bool, // Packet Type, 0 -> UDP, 1 -> TCP
@@ -241,7 +257,10 @@ pub struct TransmitDescriptorTcpContext {
     pub tucmd_tse: bool, // TCP Segmentation Enable
 
     #[packed_field(bits = "91")]
-    pub tucmd_rs: bool, // Report status, if set status_dd should be set after processing packet
+    tucmd_rs: bool, // Report status, if set status_dd should be set after processing packet
+
+    #[packed_field(bits = "93")]
+    tucmd_dext: ReservedOne<packed_bits::Bits<1>>, // Descriptor extension, 1 in this type
 
     // Status field offset 96 bits
     #[packed_field(bits = "96")]
@@ -264,12 +283,21 @@ pub struct TransmitDescriptorTcpData {
     #[packed_field(bits = "64:83")]
     pub length: u32,
 
+    #[packed_field(bits = "84")]
+    dtyp: ReservedOnes<packed_bits::Bits<4>>, // Descriptor type, 0001b in this type
+
     // Command field offset 88 bits
     #[packed_field(bits = "88")]
     pub dcmd_eop: bool, // End of packet
 
     #[packed_field(bits = "91")]
-    pub dcmd_rs: bool, // Report status, if set status_dd should be set after processing packet
+    dcmd_rs: bool, // Report Status, if set status_dd should be set after processing packet
+
+    #[packed_field(bits = "92")]
+    dcmd_rps: bool, // Report Packet Sent, but treat just like Report Status
+
+    #[packed_field(bits = "93")]
+    dcmd_dext: ReservedOne<packed_bits::Bits<1>>, // Descriptor extension, 1 in this type
 
     // Status field offset 96 bits
     #[packed_field(bits = "96")]
@@ -281,8 +309,13 @@ pub struct TransmitDescriptorTcpData {
 
     #[packed_field(bits = "105")]
     pub popts_txsm: bool, // Insert TCP/UDP Checksum
+
+    #[packed_field(bits = "112:127")]
+    special: u16, // Unused but keep to not delete it when writing back descriptor
 }
 
+// TODO: Instead of having 3 different descriptor types with duplicate fields have a descriptor
+// struct containing common fields and variants for only the differences
 #[derive(Debug)]
 pub enum TransmitDescriptor {
     Legacy(TransmitDescriptorLegacy),
@@ -312,9 +345,9 @@ impl TransmitDescriptor {
 
     pub fn report_status(&self) -> bool {
         match self {
-            TransmitDescriptor::Legacy(desc) => desc.cmd_rs,
+            TransmitDescriptor::Legacy(desc) => desc.cmd_rs || desc.cmd_rps,
             TransmitDescriptor::TcpContext(desc) => desc.tucmd_rs,
-            TransmitDescriptor::TcpData(desc) => desc.dcmd_rs,
+            TransmitDescriptor::TcpData(desc) => desc.dcmd_rs || desc.dcmd_rps,
         }
     }
 
