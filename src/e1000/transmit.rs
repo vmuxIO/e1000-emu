@@ -38,7 +38,7 @@ impl TransmitDescriptorSequence {
         self.data.resize(old_len + length, 0);
 
         nic_ctx.dma_prepare(address, 4096); // Map whole page
-        nic_ctx.dma_read(address, &mut self.data.as_mut_slice()[old_len..]);
+        nic_ctx.dma_read(address, &mut self.data.as_mut_slice()[old_len..], 0);
         Ok(())
     }
 

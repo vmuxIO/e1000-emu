@@ -1,4 +1,4 @@
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, ensure, Result};
 use log::debug;
 use packed_struct::derive::PackedStruct;
 use packed_struct::prelude::*;
@@ -23,17 +23,14 @@ impl DescriptorRing {
     fn read_descriptor_raw(
         &self, index: usize, nic_ctx: &mut dyn NicContext,
     ) -> Result<[u8; DESCRIPTOR_LENGTH]> {
-        let mut ring_buffer = vec![0u8; self.length * DESCRIPTOR_LENGTH];
-        nic_ctx.dma_prepare(self.ring_address, ring_buffer.len());
-        nic_ctx.dma_read(self.ring_address, ring_buffer.as_mut_slice());
-
-        let buffer = ring_buffer
-            .chunks_exact(DESCRIPTOR_LENGTH)
-            .nth(index)
-            .context("Descriptor not in mapping")?;
+        nic_ctx.dma_prepare(self.ring_address, self.length * DESCRIPTOR_LENGTH);
 
         let mut data = [0u8; DESCRIPTOR_LENGTH];
-        data.copy_from_slice(buffer);
+        nic_ctx.dma_read(
+            self.ring_address,
+            data.as_mut_slice(),
+            index * DESCRIPTOR_LENGTH,
+        );
         data.reverse(); // Reverse because of endianness
 
         Ok(data)
@@ -55,21 +52,11 @@ impl DescriptorRing {
     where
         T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]>,
     {
-        let mut ring_buffer = vec![0u8; self.length * DESCRIPTOR_LENGTH];
-        nic_ctx.dma_prepare(self.ring_address, ring_buffer.len());
-        nic_ctx.dma_read(self.ring_address, ring_buffer.as_mut_slice());
-
-        let buffer = ring_buffer
-            .chunks_exact_mut(DESCRIPTOR_LENGTH)
-            .nth(index)
-            .context("Descriptor not in mapping")?;
+        nic_ctx.dma_prepare(self.ring_address, self.length * DESCRIPTOR_LENGTH);
 
         let mut data = desc.pack()?;
         data.reverse(); // Reverse because of endianness
-
-        buffer.copy_from_slice(data.as_slice());
-        // Dma range already prepared
-        nic_ctx.dma_write(self.ring_address, ring_buffer.as_mut_slice());
+        nic_ctx.dma_write(self.ring_address, &mut data, index * DESCRIPTOR_LENGTH);
         Ok(())
     }
 

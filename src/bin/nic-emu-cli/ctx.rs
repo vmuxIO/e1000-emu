@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
@@ -39,35 +40,46 @@ impl NicContext for LibvfioUserContext {
     }
 
     fn dma_prepare(&mut self, address: usize, length: usize) {
-        self.dma_mappings.entry(address).or_insert_with(|| {
+        let new_mapping = || {
             self.device_context
                 .dma_map(address, length, 1, true, true)
                 .unwrap()
-        });
+        };
+
+        // Update if length increased
+        match self.dma_mappings.entry(address) {
+            Entry::Occupied(mut entry) => {
+                let mapping = entry.get_mut();
+                if mapping.region_length(0) < length {
+                    *mapping = new_mapping();
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(new_mapping());
+            }
+        }
     }
 
-    fn dma_read(&mut self, address: usize, buffer: &mut [u8]) {
+    fn dma_read(&mut self, address: usize, buffer: &mut [u8], offset: usize) {
         // Currently does not support reading/writing at an offset
         let mapping = self
             .dma_mappings
             .get_mut(&address)
             .expect("Missing dma mapping, dma_prepare is probably missing");
 
-        let dma_buffer = mapping.dma(0);
-        buffer.copy_from_slice(&dma_buffer[..buffer.len()]);
+        mapping.read_into_volatile(0, buffer, offset).unwrap();
         self.dma_read_count += 1;
         self.dma_read_bytes += buffer.len() as u64;
     }
 
-    fn dma_write(&mut self, address: usize, buffer: &[u8]) {
+    fn dma_write(&mut self, address: usize, buffer: &[u8], offset: usize) {
         // Currently does not support reading/writing at an offset
         let mapping = self
             .dma_mappings
             .get_mut(&address)
             .expect("Missing dma mapping, dma_prepare is probably missing");
 
-        let dma_buffer = mapping.dma_mut(0);
-        dma_buffer[..buffer.len()].copy_from_slice(buffer);
+        mapping.write_volatile(0, buffer, offset).unwrap();
         self.dma_write_count += 1;
         self.dma_write_bytes += buffer.len() as u64;
     }

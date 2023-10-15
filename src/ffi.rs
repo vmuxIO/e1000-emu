@@ -54,18 +54,30 @@ impl NicContext for FfiCallbacks {
         }
 
         // Assume everything went well...
+        // TODO: Add return value to send callback?
         Ok(buffer.len())
     }
 
-    fn dma_read(&mut self, address: usize, buffer: &mut [u8]) {
+    // TODO: Split address and offset in callbacks too?
+    fn dma_read(&mut self, address: usize, buffer: &mut [u8], offset: usize) {
         unsafe {
-            (self.dma_read_cb)(self.private_ptr, address, buffer.as_mut_ptr(), buffer.len());
+            (self.dma_read_cb)(
+                self.private_ptr,
+                address + offset,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+            );
         }
     }
 
-    fn dma_write(&mut self, address: usize, buffer: &[u8]) {
+    fn dma_write(&mut self, address: usize, buffer: &[u8], offset: usize) {
         unsafe {
-            (self.dma_write_cb)(self.private_ptr, address, buffer.as_ptr(), buffer.len());
+            (self.dma_write_cb)(
+                self.private_ptr,
+                address + offset,
+                buffer.as_ptr(),
+                buffer.len(),
+            );
         }
     }
 

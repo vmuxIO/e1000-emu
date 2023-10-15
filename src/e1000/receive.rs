@@ -56,7 +56,7 @@ impl<C: NicContext> E1000<C> {
 
         self.nic_ctx
             .dma_prepare(descriptor.buffer as usize, buffer.len());
-        self.nic_ctx.dma_write(descriptor.buffer as usize, &buffer);
+        self.nic_ctx.dma_write(descriptor.buffer as usize, &buffer, 0);
 
         trace!("Put RX descriptor: {:?}", descriptor);
         rx_ring.write_and_advance_head(descriptor, &mut self.nic_ctx)?;
