@@ -76,9 +76,9 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
 name = "bindgen"
-version = "0.66.1"
+version = "0.68.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2b84e06fc203107bfbad243f4aba2af864eb7db3b1cf46ea0a023b0b433d2a7"
+checksum = "726e4313eb6ec35d2730258ad4e15b547ee75d6afaa1361a922e78e59b7d8078"
 dependencies = [
  "bitflags 2.4.0",
  "cexpr",
@@ -123,9 +123,9 @@ dependencies = [
 
 [[package]]
 name = "cbindgen"
-version = "0.25.0"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faeaa693e5a727975a79211b8f35c0cb09b031fdb6eaa4a788bc6713d01488ca"
+checksum = "da6bc11b07529f16944307272d5bd9b22530bc7d05751717c9d416586cedab49"
 dependencies = [
  "clap 3.2.25",
  "heck",
@@ -539,8 +539,8 @@ dependencies = [
 
 [[package]]
 name = "libvfio-user"
-version = "0.0.1"
-source = "git+https://github.com/vmuxIO/libvfio-user-rs.git?rev=667916a90288883af6fb782d1a74ed0590b7c58f#667916a90288883af6fb782d1a74ed0590b7c58f"
+version = "0.1.0"
+source = "git+https://github.com/vmuxIO/libvfio-user-rs.git?rev=b5c861a719b181d665873cb35ea1ad8a1b3b7100#b5c861a719b181d665873cb35ea1ad8a1b3b7100"
 dependencies = [
  "anyhow",
  "derive_builder",
@@ -550,8 +550,8 @@ dependencies = [
 
 [[package]]
 name = "libvfio-user-sys"
-version = "0.0.1"
-source = "git+https://github.com/vmuxIO/libvfio-user-rs.git?rev=667916a90288883af6fb782d1a74ed0590b7c58f#667916a90288883af6fb782d1a74ed0590b7c58f"
+version = "0.1.0"
+source = "git+https://github.com/vmuxIO/libvfio-user-rs.git?rev=b5c861a719b181d665873cb35ea1ad8a1b3b7100#b5c861a719b181d665873cb35ea1ad8a1b3b7100"
 dependencies = [
  "anyhow",
  "bindgen",
