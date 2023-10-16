@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use log::{trace, warn};
 use packed_struct::PackedStruct;
@@ -36,7 +36,12 @@ impl<C: NicContext> E1000<C> {
             }
 
             if mitigation.is_active() {
-                warn!("Timer elapsed called too early, mitigation still active");
+                warn!(
+                    "Timer elapsed called too early, mitigation still active for {:?}",
+                    mitigation
+                        .expiration
+                        .saturating_duration_since(Instant::now())
+                );
                 return;
             }
         } else {
@@ -98,7 +103,12 @@ impl<C: NicContext> E1000<C> {
         // This should not lead to an infinite loop, as this doesn't set timer yet
         if self.enable_interrupt_mitigation {
             if let Some(duration) = self.regs.interrupt_throttling.get_itr_interval() {
-                self.mitigate_interrupts(duration);
+                trace!("Mitigating interrupts for next {:?}", duration);
+                self.interrupt_mitigation = Some(InterruptMitigation {
+                    expiration: Instant::now() + duration,
+                    // No timer is needed until interrupts are reported during mitigation
+                    interrupt_after: false,
+                })
             }
         }
     }
@@ -139,28 +149,5 @@ impl<C: NicContext> E1000<C> {
         trace!("Reporting: MDI/O Access Complete");
         self.regs.interrupt_cause.MDAC = true;
         self.interrupt();
-    }
-
-    /// Update mitigation time to expire in given duration or before
-    fn mitigate_interrupts(&mut self, for_max: Duration) {
-        trace!("Mitigating interrupts for max {:?}", for_max);
-        let new_expiration = Instant::now() + for_max;
-        if let Some(mitigation) = &mut self.interrupt_mitigation {
-            // Let previous mitigation expire first if expires first
-            if !mitigation.is_active_at(new_expiration) {
-                return;
-            }
-            mitigation.expiration = new_expiration;
-            if mitigation.interrupt_after {
-                trace!("Rescheduling timer for in {:?}", for_max);
-                self.nic_ctx.set_timer(for_max);
-            }
-        } else {
-            self.interrupt_mitigation = Some(InterruptMitigation {
-                expiration: new_expiration,
-                // No timer is needed until interrupts would be reported during mitigation
-                interrupt_after: false,
-            })
-        }
     }
 }

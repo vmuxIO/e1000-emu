@@ -127,9 +127,6 @@ fn main() {
     // Buffer for received packets interface
     let mut interface_buffer = [0u8; 4096]; // Big enough
 
-    // Previous timer duration to check if it has changed
-    let mut previous_timer_delay = None;
-
     let start = Instant::now();
     'polling: loop {
         events.clear();
@@ -146,19 +143,6 @@ fn main() {
 
                     // Try to catch up on deferred packets (arrived during throttling)
                     receive_packets(&mut e1000_device.e1000, &mut interface_buffer);
-
-                    // Update timer
-                    if previous_timer_delay == e1000_device.e1000.nic_ctx.timer {
-                        continue;
-                    }
-
-                    if let Some(new_duration) = e1000_device.e1000.nic_ctx.timer {
-                        tfd.set_state(TimerState::Oneshot(new_duration), SetTimeFlags::Default);
-                    } else {
-                        tfd.set_state(TimerState::Disarmed, SetTimeFlags::Default);
-                    }
-                    previous_timer_delay = e1000_device.e1000.nic_ctx.timer;
-                    // TODO: Ignore timer events this polling iteration
                 }
                 EVENT_KEY_RECEIVE => {
                     trace!("Poller: Interface event");
@@ -166,15 +150,38 @@ fn main() {
                 }
                 EVENT_KEY_TIMER => {
                     trace!("Poller: Timer event");
+                    // Catch old timer events that aren't needed anymore
+                    match e1000_device.e1000.nic_ctx.timer {
+                        Some(instant) if instant > Instant::now() => continue,
+                        None => continue,
+                        _ => {}
+                    }
+
                     e1000_device.e1000.timer_elapsed();
 
-                    // Reset timer detection
-                    previous_timer_delay = None;
+                    // Reset timer to mark it as done
                     e1000_device.e1000.nic_ctx.timer = None;
                 }
                 x => {
                     unreachable!("Unknown event key {}", x);
                 }
+            }
+
+            // Update timer
+            if e1000_device.e1000.nic_ctx.timer_has_changed {
+                let duration = if let Some(change) = e1000_device.e1000.nic_ctx.timer {
+                    // Check if timer has not already passed since change
+                    change.checked_duration_since(Instant::now())
+                } else {
+                    None
+                };
+
+                if let Some(duration) = duration {
+                    tfd.set_state(TimerState::Oneshot(duration), SetTimeFlags::Default);
+                } else {
+                    tfd.set_state(TimerState::Disarmed, SetTimeFlags::Default);
+                }
+                e1000_device.e1000.nic_ctx.timer_has_changed = false;
             }
         }
     }
@@ -205,6 +212,7 @@ fn main() {
 fn receive_packets(e1000: &mut E1000<LibvfioUserContext>, shared_buffer: &mut [u8; 4096]) {
     loop {
         if e1000.receive_state.should_defer() {
+            trace!("Deferring receiving packets");
             break;
         }
 
