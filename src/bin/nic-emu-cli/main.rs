@@ -132,57 +132,68 @@ fn main() {
         events.clear();
         poller.wait(&mut events, None).unwrap();
 
+        // Collect which events happened and then run corresponding actions after
+        // to avoid running the same action multiple times since
+        // each action will always handle everything that needs to be done
+        let mut run = false;
+        let mut receive = false;
+        let mut timer_elapsed = false;
+
         for event in events.iter() {
             match event.key {
                 EVENT_KEY_RUN => {
-                    trace!("Poller: Libvfio-user event");
-                    if let Err(e) = ctx.run() {
-                        error!("Error processing libvfio-user command: {}", e);
-                        break 'polling;
-                    }
-
+                    run = true;
                     // Try to catch up on deferred packets (arrived during throttling)
-                    receive_packets(&mut e1000_device.e1000, &mut interface_buffer);
+                    receive = true;
                 }
                 EVENT_KEY_RECEIVE => {
-                    trace!("Poller: Interface event");
-                    receive_packets(&mut e1000_device.e1000, &mut interface_buffer)
+                    receive = true;
                 }
                 EVENT_KEY_TIMER => {
-                    trace!("Poller: Timer event");
-                    // Catch old timer events that aren't needed anymore
-                    match e1000_device.e1000.nic_ctx.timer {
-                        Some(instant) if instant > Instant::now() => continue,
-                        None => continue,
-                        _ => {}
-                    }
-
-                    e1000_device.e1000.timer_elapsed();
-
-                    // Reset timer to mark it as done
-                    e1000_device.e1000.nic_ctx.timer = None;
+                    timer_elapsed = true;
                 }
                 x => {
                     unreachable!("Unknown event key {}", x);
                 }
             }
+        }
 
-            // Update timer
-            if e1000_device.e1000.nic_ctx.timer_has_changed {
-                let duration = if let Some(change) = e1000_device.e1000.nic_ctx.timer {
-                    // Check if timer has not already passed since change
-                    change.checked_duration_since(Instant::now())
-                } else {
-                    None
-                };
-
-                if let Some(duration) = duration {
-                    tfd.set_state(TimerState::Oneshot(duration), SetTimeFlags::Default);
-                } else {
-                    tfd.set_state(TimerState::Disarmed, SetTimeFlags::Default);
-                }
-                e1000_device.e1000.nic_ctx.timer_has_changed = false;
+        if run {
+            if let Err(e) = ctx.run() {
+                error!("Error processing libvfio-user command: {}", e);
+                break 'polling;
             }
+        }
+        if receive {
+            receive_packets(&mut e1000_device.e1000, &mut interface_buffer);
+        }
+        if timer_elapsed {
+            // Don't trigger for old timer events that aren't needed anymore
+            if let Some(instant) = e1000_device.e1000.nic_ctx.timer {
+                if instant <= Instant::now() {
+                    e1000_device.e1000.timer_elapsed();
+
+                    // Reset timer to mark it as done
+                    e1000_device.e1000.nic_ctx.timer = None;
+                }
+            }
+        }
+
+        // Update timer
+        if e1000_device.e1000.nic_ctx.timer_has_changed {
+            let duration = if let Some(change) = e1000_device.e1000.nic_ctx.timer {
+                // Check if timer has not already passed since change
+                change.checked_duration_since(Instant::now())
+            } else {
+                None
+            };
+
+            if let Some(duration) = duration {
+                tfd.set_state(TimerState::Oneshot(duration), SetTimeFlags::Default);
+            } else {
+                tfd.set_state(TimerState::Disarmed, SetTimeFlags::Default);
+            }
+            e1000_device.e1000.nic_ctx.timer_has_changed = false;
         }
     }
     // Just let poller be dropped, delete previous fds if we want to reuse it in the future
