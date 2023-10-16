@@ -47,4 +47,5 @@ rev = "b5c861a719b181d665873cb35ea1ad8a1b3b7100"
 #path = "../libvfio-user-rs/libvfio-user"
 
 [build-dependencies]
-cbindgen = { version = "0.26.0", optional = true }
+# Exclude default clap feature which is only needed for the binary version of cbindgen
+cbindgen = { version = "0.26.0", default-features = false, optional = true }
