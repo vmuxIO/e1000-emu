@@ -1,8 +1,8 @@
-use anyhow::{anyhow, ensure, Result};
-use log::debug;
+use anyhow::{anyhow, Result};
+use log::{debug, error};
 use packed_struct::derive::PackedStruct;
 use packed_struct::prelude::*;
-use packed_struct::PackedStruct;
+use packed_struct::{PackedStruct, PackingResult};
 
 use crate::e1000::E1000;
 use crate::NicContext;
@@ -19,9 +19,10 @@ pub struct DescriptorRing {
 }
 
 impl DescriptorRing {
-    fn read_descriptor_raw(
-        &self, index: usize, nic_ctx: &mut dyn NicContext,
-    ) -> Result<[u8; DESCRIPTOR_LENGTH]> {
+    fn read_descriptor<T>(&self, index: usize, nic_ctx: &mut dyn NicContext) -> Result<T>
+    where
+        T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]>,
+    {
         nic_ctx.dma_prepare(self.ring_address, self.length * DESCRIPTOR_LENGTH);
 
         let mut data = [0u8; DESCRIPTOR_LENGTH];
@@ -31,15 +32,6 @@ impl DescriptorRing {
             index * DESCRIPTOR_LENGTH,
         );
         data.reverse(); // Reverse because of endianness
-
-        Ok(data)
-    }
-
-    fn read_descriptor<T>(&self, index: usize, nic_ctx: &mut dyn NicContext) -> Result<T>
-    where
-        T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]>,
-    {
-        let data = self.read_descriptor_raw(index, nic_ctx)?;
 
         let descriptor = T::unpack(&data)?;
         Ok(descriptor)
@@ -77,22 +69,21 @@ impl DescriptorRing {
         self.head = (self.head + 1) % self.length;
     }
 
-    pub fn read_head_raw(&self, nic_ctx: &mut dyn NicContext) -> Result<[u8; DESCRIPTOR_LENGTH]> {
-        ensure!(
-            !self.is_empty(),
-            "Cannot read head, head is currently owned by software"
-        );
-        self.read_descriptor_raw(self.head, nic_ctx)
+    fn head_check(&self) -> Result<()> {
+        if self.is_empty() {
+            Err(anyhow!(
+                "Cannot access head, head is currently owned by software"
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn read_head<T>(&self, nic_ctx: &mut dyn NicContext) -> Result<T>
     where
         T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]>,
     {
-        ensure!(
-            !self.is_empty(),
-            "Cannot read head, head is currently owned by software"
-        );
+        self.head_check()?;
         self.read_descriptor(self.head, nic_ctx)
     }
 
@@ -102,10 +93,7 @@ impl DescriptorRing {
     where
         T: PackedStruct<ByteArray = [u8; DESCRIPTOR_LENGTH]>,
     {
-        ensure!(
-            !self.is_empty(),
-            "Cannot write head, head is currently owned by software"
-        );
+        self.head_check()?;
         self.write_descriptor(desc, self.head, nic_ctx)?;
         self.advance_head();
         Ok(())
@@ -154,15 +142,32 @@ pub struct ReceiveDescriptor {
     status_ixsm: ReservedOne<packed_bits::Bits<1>>, // Ignore checksum indication, always on
 }
 
-// Base transmit descriptor for differentiating between the different transmit descriptor types
+// Common transmit descriptor for differentiating between the different transmit descriptor types
 #[derive(PackedStruct, Debug)]
 #[packed_struct(bit_numbering = "lsb0", size_bytes = "16", endian = "msb")]
-pub struct TransmitDescriptorBase {
+pub struct TransmitDescriptorCommon {
     #[packed_field(bits = "84")]
-    pub dtyp: u8, // Extension type, 0000b -> TCP/IP context, 0001b -> TCP/IP data
+    dtyp: u8, // Extension type, 0000b -> TCP/IP context, 0001b -> TCP/IP data
+
+    // Command field offset 88 bits in all transmit descriptor variants
+    #[packed_field(bits = "91")]
+    cmd_rs: bool, // Report Status, if set status_dd should be set after processing packet
+
+    #[packed_field(bits = "92")] // Reserved in context descriptor
+    cmd_rps: bool, // Report Packet Sent, but treat just like Report Status
 
     #[packed_field(bits = "93")]
-    pub dext: bool, // Extension, 0 -> Legacy descriptor, 1 -> TCP/IP context or data descriptor
+    cmd_dext: bool, // Extension, 0 -> Legacy descriptor, 1 -> TCP/IP context or data descriptor
+
+    // Status field offset 96 bits in all transmit descriptor variants
+    #[packed_field(bits = "96")]
+    pub status_dd: bool, // Descriptor Done
+}
+
+impl TransmitDescriptorCommon {
+    pub fn report_status(&self) -> bool {
+        self.cmd_rs || self.cmd_rps
+    }
 }
 
 // Legacy Transmit Descriptor Format
@@ -184,19 +189,6 @@ pub struct TransmitDescriptorLegacy {
 
     #[packed_field(bits = "90")]
     pub cmd_ic: bool, // Insert Checksum
-
-    #[packed_field(bits = "91")]
-    cmd_rs: bool, // Report Status, if set status_dd should be set after processing packet
-
-    #[packed_field(bits = "92")]
-    cmd_rps: bool, // Report Packet Sent, but treat just like Report Status
-
-    #[packed_field(bits = "93")]
-    cmd_dext: ReservedZero<packed_bits::Bits<1>>, // Descriptor extension, 0 in this type
-
-    // Status field offset 96 bits
-    #[packed_field(bits = "96")]
-    pub status_dd: bool, // Descriptor Done
 
     #[packed_field(bits = "104:111")]
     pub css: u8, // Checksum Start Field
@@ -231,9 +223,6 @@ pub struct TransmitDescriptorTcpContext {
     #[packed_field(bits = "64:83")]
     pub paylen: u32, // Payload Length
 
-    #[packed_field(bits = "84")]
-    dtyp: ReservedZeroes<packed_bits::Bits<4>>, // Descriptor type, 0000b in this type
-
     // Command field offset 88 bits
     #[packed_field(bits = "88")]
     pub tucmd_tcp: bool, // Packet Type, 0 -> UDP, 1 -> TCP
@@ -243,16 +232,6 @@ pub struct TransmitDescriptorTcpContext {
 
     #[packed_field(bits = "90")]
     pub tucmd_tse: bool, // TCP Segmentation Enable
-
-    #[packed_field(bits = "91")]
-    tucmd_rs: bool, // Report status, if set status_dd should be set after processing packet
-
-    #[packed_field(bits = "93")]
-    tucmd_dext: ReservedOne<packed_bits::Bits<1>>, // Descriptor extension, 1 in this type
-
-    // Status field offset 96 bits
-    #[packed_field(bits = "96")]
-    pub status_dd: bool, // Descriptor Done
 
     #[packed_field(bits = "104:111")]
     pub hdrlen: u8, // Header Length
@@ -271,25 +250,9 @@ pub struct TransmitDescriptorTcpData {
     #[packed_field(bits = "64:83")]
     pub length: u32,
 
-    #[packed_field(bits = "84")]
-    dtyp: ReservedOnes<packed_bits::Bits<4>>, // Descriptor type, 0001b in this type
-
     // Command field offset 88 bits
     #[packed_field(bits = "88")]
     pub dcmd_eop: bool, // End of packet
-
-    #[packed_field(bits = "91")]
-    dcmd_rs: bool, // Report Status, if set status_dd should be set after processing packet
-
-    #[packed_field(bits = "92")]
-    dcmd_rps: bool, // Report Packet Sent, but treat just like Report Status
-
-    #[packed_field(bits = "93")]
-    dcmd_dext: ReservedOne<packed_bits::Bits<1>>, // Descriptor extension, 1 in this type
-
-    // Status field offset 96 bits
-    #[packed_field(bits = "96")]
-    pub status_dd: bool, // Descriptor Done
 
     // Packet Options field offset 104 bits
     #[packed_field(bits = "104")]
@@ -302,48 +265,58 @@ pub struct TransmitDescriptorTcpData {
     special: u16, // Unused but keep to not delete it when writing back descriptor
 }
 
-// TODO: Instead of having 3 different descriptor types with duplicate fields have a descriptor
-// struct containing common fields and variants for only the differences
 #[derive(Debug)]
-pub enum TransmitDescriptor {
+pub enum TransmitDescriptorVariant {
     Legacy(TransmitDescriptorLegacy),
     TcpContext(TransmitDescriptorTcpContext),
     TcpData(TransmitDescriptorTcpData),
 }
 
-impl TransmitDescriptor {
-    pub fn read_descriptor(tx_ring: &DescriptorRing, nic_ctx: &mut dyn NicContext) -> Result<Self> {
-        let raw_descriptor = tx_ring.read_head_raw(nic_ctx)?;
+#[derive(Debug)]
+pub struct TransmitDescriptor {
+    pub common: TransmitDescriptorCommon,
+    pub variant: TransmitDescriptorVariant,
+}
 
-        let base_descriptor = TransmitDescriptorBase::unpack(&raw_descriptor)?;
+impl PackedStruct for TransmitDescriptor {
+    type ByteArray = [u8; DESCRIPTOR_LENGTH];
 
-        match (base_descriptor.dext, base_descriptor.dtyp) {
-            (false, _) => Ok(Self::Legacy(TransmitDescriptorLegacy::unpack(
-                &raw_descriptor,
-            )?)),
-            (true, 0) => Ok(Self::TcpContext(TransmitDescriptorTcpContext::unpack(
-                &raw_descriptor,
-            )?)),
-            (true, 1) => Ok(Self::TcpData(TransmitDescriptorTcpData::unpack(
-                &raw_descriptor,
-            )?)),
-            _ => Err(anyhow!("Failed to match transmit descriptor type.")),
-        }
+    fn pack(&self) -> PackingResult<Self::ByteArray> {
+        let common_packed = self.common.pack()?;
+        let variant_packed = match &self.variant {
+            TransmitDescriptorVariant::Legacy(desc) => desc.pack(),
+            TransmitDescriptorVariant::TcpContext(desc) => desc.pack(),
+            TransmitDescriptorVariant::TcpData(desc) => desc.pack(),
+        }?;
+
+        // Bitwise or in place
+        let mut combined = common_packed;
+        combined
+            .iter_mut()
+            .zip(variant_packed)
+            .for_each(|(x, y)| *x |= y);
+
+        Ok(combined)
     }
 
-    pub fn report_status(&self) -> bool {
-        match self {
-            TransmitDescriptor::Legacy(desc) => desc.cmd_rs || desc.cmd_rps,
-            TransmitDescriptor::TcpContext(desc) => desc.tucmd_rs,
-            TransmitDescriptor::TcpData(desc) => desc.dcmd_rs || desc.dcmd_rps,
-        }
-    }
+    fn unpack(src: &Self::ByteArray) -> PackingResult<Self> {
+        let common = TransmitDescriptorCommon::unpack(&src)?;
+        let variant = match (common.cmd_dext, common.dtyp) {
+            (false, _) => {
+                TransmitDescriptorVariant::Legacy(TransmitDescriptorLegacy::unpack(&src)?)
+            }
+            (true, 0) => {
+                TransmitDescriptorVariant::TcpContext(TransmitDescriptorTcpContext::unpack(&src)?)
+            }
+            (true, 1) => {
+                TransmitDescriptorVariant::TcpData(TransmitDescriptorTcpData::unpack(&src)?)
+            }
+            _ => {
+                error!("Failed to match transmit descriptor type.");
+                return Err(PackingError::InternalError);
+            }
+        };
 
-    pub fn descriptor_done_mut(&mut self) -> &mut bool {
-        match self {
-            TransmitDescriptor::Legacy(ref mut desc) => &mut desc.status_dd,
-            TransmitDescriptor::TcpContext(ref mut desc) => &mut desc.status_dd,
-            TransmitDescriptor::TcpData(ref mut desc) => &mut desc.status_dd,
-        }
+        Ok(Self { common, variant })
     }
 }

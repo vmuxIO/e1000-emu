@@ -49,8 +49,8 @@ impl TransmitDescriptorSequence {
     ) -> Result<()> {
         assert!(!self.done);
 
-        match descriptor {
-            TransmitDescriptor::Legacy(descriptor) => {
+        match &descriptor.variant {
+            TransmitDescriptorVariant::Legacy(descriptor) => {
                 ensure!(!self.tcp, "Legacy transmit descriptor in tcp sequence");
 
                 if descriptor.cmd_ic {
@@ -66,14 +66,14 @@ impl TransmitDescriptorSequence {
 
                 self.done = descriptor.cmd_eop;
             }
-            TransmitDescriptor::TcpContext(..) => {
+            TransmitDescriptorVariant::TcpContext(..) => {
                 ensure!(
                     self.data.is_empty(),
                     "Tcp context transmit descriptor occurred in the middle of a packet"
                 );
                 // Context is saved outside of sequence as the context can be used multiple times
             }
-            TransmitDescriptor::TcpData(descriptor) => {
+            TransmitDescriptorVariant::TcpData(descriptor) => {
                 // self.tcp is always false for first iteration
                 if !self.tcp {
                     ensure!(
@@ -183,8 +183,7 @@ impl<C: NicContext> E1000<C> {
             let mut sequence = TransmitDescriptorSequence::default();
             let mut report_status = false;
             while !tx_ring.is_empty() {
-                let mut transmit_descriptor =
-                    TransmitDescriptor::read_descriptor(&tx_ring, &mut self.nic_ctx).unwrap();
+                let mut transmit_descriptor = tx_ring.read_head(&mut self.nic_ctx).unwrap();
 
                 trace!("Processing TX descriptor: {:?}", transmit_descriptor);
 
@@ -196,32 +195,18 @@ impl<C: NicContext> E1000<C> {
                 }
 
                 // Done processing, report if requested
-                if transmit_descriptor.report_status() {
+                if transmit_descriptor.common.report_status() {
                     report_status = true;
-                    *transmit_descriptor.descriptor_done_mut() = true;
+                    transmit_descriptor.common.status_dd = true;
 
-                    match &transmit_descriptor {
-                        TransmitDescriptor::Legacy(desc) => {
-                            tx_ring
-                                .write_and_advance_head(desc, &mut self.nic_ctx)
-                                .unwrap();
-                        }
-                        TransmitDescriptor::TcpContext(desc) => {
-                            tx_ring
-                                .write_and_advance_head(desc, &mut self.nic_ctx)
-                                .unwrap();
-                        }
-                        TransmitDescriptor::TcpData(desc) => {
-                            tx_ring
-                                .write_and_advance_head(desc, &mut self.nic_ctx)
-                                .unwrap();
-                        }
-                    }
+                    tx_ring
+                        .write_and_advance_head(&transmit_descriptor, &mut self.nic_ctx)
+                        .unwrap();
                 } else {
                     tx_ring.advance_head();
                 }
 
-                if let TransmitDescriptor::TcpContext(desc) = transmit_descriptor {
+                if let TransmitDescriptorVariant::TcpContext(desc) = transmit_descriptor.variant {
                     self.transmit_tcp_context = Some(desc);
                 }
 
