@@ -114,6 +114,7 @@ impl E1000Device {
         let mut e1000_device = config.produce::<E1000Device>().unwrap();
         debug!("VFU context created successfully");
 
+        // TODO: Move this inside E1000 constructor, would require changes to libvfio-user-rs
         // Setup initial eeprom, should not be changed afterwards
         e1000_device
             .e1000
