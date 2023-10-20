@@ -31,8 +31,7 @@ impl Device for E1000Device {
                 1..=4 => Level::Error,
                 5 => Level::Warn,
                 6 => Level::Info,
-                7 => Level::Debug,
-                8.. => Level::Trace,
+                7.. => Level::Trace, // Debug level 7 included since libvfio-user logs are verbose
                 _ => unreachable!("Invalid syslog level {}", level),
             },
             "libvfio-user log ({}): {}",
