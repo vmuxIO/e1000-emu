@@ -35,7 +35,7 @@ by including the generate-bindings feature.
 #### Dependencies
 To build the binary you will need
 - All the dependencies of [libvfio-user](https://github.com/nutanix/libvfio-user),
-namely the libraries of `json-c` and `cmocka`.
+  namely the libraries of `json-c` and `cmocka`.
 - `libclang` for [libvfio-user-rs](https://github.com/vmuxIO/libvfio-user-rs).
 
 ### Release build
@@ -66,6 +66,11 @@ If you use the intel-iommu device in QEMU make sure to add `caching-mode=on` for
 
 Newer libvfio-user and QEMU versions may change the mechanism of the underlying communication
 and thus may require updates to [libvfio-user-rs](https://github.com/vmuxIO/libvfio-user-rs) and nic-emu.
+
+### vfio-e1000
+[vfio-e1000](https://github.com/mmisono/vfio-e1000)
+must be compiled with MSI interrupt support (`-DMSI`),
+unless polling mode (`-DPOLL`) is used.
 
 ## References
 - https://www.intel.com/content/dam/doc/manual/pci-pci-x-family-gbe-controllers-software-dev-manual.pdf
