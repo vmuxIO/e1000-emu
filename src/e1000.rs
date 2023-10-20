@@ -147,8 +147,8 @@ impl<C: NicContext> E1000<C> {
     fn rctl_write(&mut self) {
         if self.regs.rctl.EN && self.rx_ring.is_none() {
             self.setup_rx_ring();
-            self.update_rx_throttling();
         }
+        self.update_receive_state();
     }
 
     fn tctl_write(&mut self) {
@@ -162,7 +162,7 @@ impl<C: NicContext> E1000<C> {
             // Software is done with the received packet(s)
             rx_ring.tail = self.regs.rd_t.tail as usize;
 
-            self.update_rx_throttling();
+            self.update_receive_state();
         }
         // Else RDT was just initialized
     }

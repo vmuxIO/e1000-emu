@@ -77,7 +77,7 @@ impl<C: NicContext> E1000<C> {
         rx_ring.write_and_advance_head(&descriptor, &mut self.nic_ctx)?;
         self.regs.rd_h.head = rx_ring.head as u16;
 
-        self.update_rx_throttling();
+        self.update_receive_state();
 
         // Workaround: Report rxt0 even though we don't emulate any timer
         self.report_rxt0();
@@ -85,22 +85,36 @@ impl<C: NicContext> E1000<C> {
         Ok(())
     }
 
-    pub fn update_rx_throttling(&mut self) {
+    pub fn update_receive_state(&mut self) {
         if let Some(rx_ring) = &self.rx_ring {
             let hw_descriptors = rx_ring.hardware_owned_descriptors();
-
-            let currently_throttled = self.receive_state == ReceiveState::Throttled;
-            let should_throttle = hw_descriptors <= RX_QUEUE_RESERVE;
-
             trace!("RX Ring: {} free descriptors remaining", hw_descriptors);
 
-            if !currently_throttled && should_throttle {
-                self.receive_state = ReceiveState::Throttled;
-                debug!("Throttling RX, ring full");
-            } else if currently_throttled && !should_throttle {
-                self.receive_state = ReceiveState::Online;
-                debug!("RX not throttled anymore.")
+            let should_throttle = hw_descriptors <= RX_QUEUE_RESERVE;
+            match (&self.receive_state, should_throttle) {
+                (ReceiveState::Offline, false) => {
+                    self.receive_state = ReceiveState::Online;
+                    debug!("RX enabled.");
+                }
+                (ReceiveState::Offline, true) => {
+                    self.receive_state = ReceiveState::Throttled;
+                    debug!("RX enabled but throttled.");
+                }
+                (ReceiveState::Online, true) => {
+                    self.receive_state = ReceiveState::Throttled;
+                    debug!("Throttling RX, ring full");
+                }
+                (ReceiveState::Throttled, false) => {
+                    self.receive_state = ReceiveState::Online;
+                    debug!("RX not throttled anymore.");
+                }
+                _ => {
+                    // No change
+                }
             }
+        } else if self.receive_state != ReceiveState::Offline {
+            self.receive_state = ReceiveState::Offline;
+            debug!("RX disabled.");
         }
     }
 }
