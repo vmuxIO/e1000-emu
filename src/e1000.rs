@@ -129,6 +129,16 @@ impl<C: NicContext> E1000<C> {
         self.interrupt_mitigation = None;
     }
 
+    // read or set interrupt_throtteling register (ITR_*)
+    pub fn interrupt_throtteling_reg(&mut self, set_value: i32) -> u16 {
+        if set_value > 0 {
+            self.regs.interrupt_throttling.interval = set_value as u16;
+            return set_value as u16;
+        } else {
+            return self.regs.interrupt_throttling.interval;
+        }
+    }
+
     fn ctrl_write(&mut self) {
         if self.regs.ctrl.RST {
             info!("Reset by driver.");

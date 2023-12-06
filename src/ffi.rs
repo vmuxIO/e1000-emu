@@ -177,4 +177,9 @@ impl E1000FFI {
     pub extern "C" fn e1000_rx_should_defer(&mut self) -> bool {
         self.e1000.receive_state.should_defer()
     }
+
+    #[no_mangle]
+    pub extern "C" fn e1000_interrupt_throtteling_reg(&mut self, set_value: i32) -> u16 {
+        self.e1000.interrupt_throtteling_reg(set_value)
+    }
 }
