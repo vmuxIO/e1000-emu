@@ -63,12 +63,12 @@ impl<C: NicContext> E1000<C> {
         // Check mask by checking if any bit is set, instead of comparing all fields
         let cause = u32::from_ne_bytes(self.regs.interrupt_cause.pack().unwrap());
         let mask = u32::from_ne_bytes(self.regs.interrupt_mask.pack().unwrap());
-        if cause & mask == 0 {
-            return;
-        }
 
         // Interrupt mitigation
         if let Some(mitigation) = &mut self.interrupt_mitigation {
+            if cause & mask == 0 {
+                return;
+            }
             let now = Instant::now();
             if mitigation.is_active_at(now) {
                 trace!("Skipping interrupt, mitigation active");
@@ -97,7 +97,7 @@ impl<C: NicContext> E1000<C> {
             "Triggering interrupt, set causes: {:?}",
             self.regs.interrupt_cause
         );
-        self.nic_ctx.trigger_interrupt();
+        self.nic_ctx.trigger_interrupt(cause & mask == 0);
 
         // Re-arm interrupt throttling timer (if enabled)
         // This should not lead to an infinite loop, as this doesn't set timer yet

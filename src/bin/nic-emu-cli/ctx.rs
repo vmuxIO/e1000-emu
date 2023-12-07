@@ -85,7 +85,7 @@ impl NicContext for LibvfioUserContext {
         self.dma_write_bytes += buffer.len() as u64;
     }
 
-    fn trigger_interrupt(&mut self) {
+    fn trigger_interrupt(&mut self, _int_pending: bool) {
         self.device_context.trigger_irq(0).unwrap();
         self.interrupt_count += 1;
     }

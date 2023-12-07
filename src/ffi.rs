@@ -34,7 +34,7 @@ type DmaWriteCallback = unsafe extern "C" fn(
     buffer: *const u8,
     len: usize,
 );
-type IssueInterruptCallback = unsafe extern "C" fn(private_ptr: *mut c_void);
+type IssueInterruptCallback = unsafe extern "C" fn(private_ptr: *mut c_void, int_pending: bool);
 
 #[repr(C)]
 struct FfiCallbacks {
@@ -81,8 +81,8 @@ impl NicContext for FfiCallbacks {
         }
     }
 
-    fn trigger_interrupt(&mut self) {
-        unsafe { (self.issue_interrupt_cb)(self.private_ptr) }
+    fn trigger_interrupt(&mut self, int_pending: bool) {
+        unsafe { (self.issue_interrupt_cb)(self.private_ptr, int_pending) }
     }
 
     fn set_timer(&mut self, _duration: Duration) {

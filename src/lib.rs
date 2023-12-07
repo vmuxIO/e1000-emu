@@ -18,7 +18,7 @@ pub trait NicContext {
     fn dma_read(&mut self, address: usize, buffer: &mut [u8], offset: usize);
     fn dma_write(&mut self, address: usize, buffer: &[u8], offset: usize);
 
-    fn trigger_interrupt(&mut self);
+    fn trigger_interrupt(&mut self, int_pending: bool);
 
     /// Set or adjust the one-shot timer
     fn set_timer(&mut self, duration: Duration);
