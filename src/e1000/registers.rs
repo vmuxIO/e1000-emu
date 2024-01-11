@@ -117,9 +117,9 @@ impl<C: NicContext> E1000<C> {
                     clear,
                     self.regs.interrupt_cause
                 );
-                if write {
+                // if write {
                     self.interrupt();
-                }
+                // }
             },
 
             // IMS (0xD0) for reading interrupt mask (read) and for enabling interrupts (write)
@@ -135,6 +135,7 @@ impl<C: NicContext> E1000<C> {
                     clear,
                     self.regs.interrupt_mask
                 );
+                self.interrupt();
             },
 
             // Receive and Transmit Control

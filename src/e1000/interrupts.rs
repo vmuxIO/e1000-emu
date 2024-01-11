@@ -140,8 +140,10 @@ impl<C: NicContext> E1000<C> {
     /// Receiver Timer Interrupt
     pub(crate) fn report_rxt0(&mut self) {
         trace!("Reporting: Receiver Timer Interrupt");
-        self.regs.interrupt_cause.RXT0 = true;
-        self.interrupt();
+        // if !self.regs.interrupt_cause.RXT0 {
+            self.regs.interrupt_cause.RXT0 = true;
+            self.interrupt();
+        // }
     }
 
     /// MDI/O Access Complete
