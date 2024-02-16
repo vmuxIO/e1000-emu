@@ -102,18 +102,22 @@ struct E1000FFI {
 
 impl E1000FFI {
     #[no_mangle]
-    pub extern "C" fn new_e1000(callbacks: FfiCallbacks) -> *mut E1000FFI {
+    pub extern "C" fn new_e1000(
+        callbacks: FfiCallbacks, ethernet_address: *const [u8; 6],
+    ) -> *mut E1000FFI {
         let mut e1000_ffi = E1000FFI {
             // Disable interrupt mitigation for now until timer callbacks have been added
             e1000: E1000::new(callbacks, false),
         };
+
+        let ethernet_address = unsafe { ethernet_address.read() };
 
         // Setup initial eeprom, should not be changed afterwards
         e1000_ffi
             .e1000
             .eeprom
             .initial_eeprom
-            .set_ethernet_address([0x02, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+            .set_ethernet_address(ethernet_address);
         e1000_ffi.e1000.eeprom.pack_initial_eeprom();
 
         Box::into_raw(Box::new(e1000_ffi))

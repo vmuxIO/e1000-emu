@@ -32,11 +32,10 @@ pretty_env_logger = "0.5.0" # Included in library too for setting up logs via FF
 # Bin dependencies:
 # all marked as optional to allow for lib compilation without bin dependencies
 tun-tap = { version = "0.1.4", default-features = false, features = ["libc"], optional = true } # Exclude default tokio feature
-polling = { version = "3.0.0", optional = true }
-# Keep clap at 4.2.1 for now to ensure compatability with rustc 1.69, latest rustc in the stable NixOS channel
-clap = { version = "=4.2.1", optional = true, features = ["derive"] }
+polling = { version = "3.3.2", optional = true }
+clap = { version = "4.4.18", optional = true, features = ["derive"] }
 macaddr = { version = "1.0.1", optional = true }
-ipnet = { version = "2.8.0", optional = true }
+ipnet = { version = "2.9.0", optional = true }
 timerfd = { version = "1.5.0", optional = true }
 
 [dependencies.libvfio-user]
@@ -46,7 +45,7 @@ optional = true
 # Pick one:
 # Latest git version of libvfio-user-rs
 git = "https://github.com/vmuxIO/libvfio-user-rs.git"
-rev = "b5c861a719b181d665873cb35ea1ad8a1b3b7100"
+rev = "a1cb90a5ab55626021f2128e57bc5ef7fc53f09b"
 
 # Local development version, with libvfio-user-rs being in the same parent directory
 #path = "../libvfio-user-rs/libvfio-user"
