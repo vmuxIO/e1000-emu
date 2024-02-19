@@ -110,7 +110,7 @@ impl E1000FFI {
             e1000: E1000::new(callbacks, false),
         };
 
-        let ethernet_address = unsafe { ethernet_address.read() };
+        let ethernet_address = unsafe { ethernet_address.read() }.clone();
 
         // Setup initial eeprom, should not be changed afterwards
         e1000_ffi
